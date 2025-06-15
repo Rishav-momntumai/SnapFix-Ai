@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Typography, Table, TableBody, TableCell, TableHead, TableRow, Paper, CircularProgress } from '@material-ui/core';
+import { Container, Typography, Table, TableBody, TableCell, TableHead, TableRow, Paper, CircularProgress } from '@mui/core';
 import axios from 'axios';
 
 const ViewIssues = () => {
