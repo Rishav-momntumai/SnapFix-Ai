@@ -1,31 +1,33 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from routes.issues import router as issues_router  # Ensure this exists
+from routes.issues import router as issues_router
 
 app = FastAPI()
 
-# CORS setup to allow both local and Netlify frontend access
+# Enable CORS for frontend access (e.g. Vite app on port 5173)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://snapfix-ai.onrender.com",              # Local development (Vite)
-        "https://snapfix-ai.netlify.app"      # Netlify deployment
-    ],
+    allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Root route for health check
+# Root route to avoid 404 on '/'
 @app.get("/")
 def read_root():
     return {"message": "SnapFix AI backend is up and running!"}
 
-# Serve favicon if it exists
+# Handle favicon requests to avoid 404 in browser
 @app.get("/favicon.ico")
 async def favicon():
-    return FileResponse("static/favicon.ico")  # optional, file must exist
+    return FileResponse("static/favicon.ico")
 
-# API router for issues
+# Include your issue-related routes
 app.include_router(issues_router, prefix="/api")
+
+# Run the app
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
