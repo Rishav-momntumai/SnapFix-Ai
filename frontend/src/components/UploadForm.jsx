@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react';
 import './UploadForm.css';
+import API_BASE_URL from '../config';
 
 function UploadForm({ setStatus, fetchIssues }) {
   const [image, setImage] = useState(null);
@@ -131,7 +132,7 @@ function UploadForm({ setStatus, fetchIssues }) {
     }
 
     try {
-      const response = await fetch('https://snapfix-ai.onrender.com/api/issues', {
+      const response = await fetch(`${API_BASE_URL}/api/issues`, {
         method: 'POST',
         body: formData,
       });
@@ -183,7 +184,7 @@ function UploadForm({ setStatus, fetchIssues }) {
     setStatus('Submitting report...');
   
     try {
-      const response = await fetch(`https://snapfix-ai.onrender.com/api/issues/${issueId}/accept`, {
+      const response = await fetch(`${API_BASE_URL}/api/issues/${issueId}/accept`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ edited_report: editedReport }),
@@ -228,7 +229,7 @@ function UploadForm({ setStatus, fetchIssues }) {
     setStatus('Generating updated report...');
 
     try {
-      const response = await fetch(`https://snapfix-ai.onrender.com/api/issues/${issueId}/decline`, {
+      const response = await fetch(`${API_BASE_URL}/api/issues/${issueId}/decline`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decline_reason: declineReason, edited_report: editedReport }),
