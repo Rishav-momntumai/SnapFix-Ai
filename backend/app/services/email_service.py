@@ -1,75 +1,117 @@
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
+from email.mime.image import MIMEImage
 import os
-import logging
-import base64
 from dotenv import load_dotenv
+import logging
+from typing import List, Tuple, Optional
+import base64
+from fastapi import HTTPException
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def send_email(
     to_email: str,
     subject: str,
-    html_content: str = None,
-    text_content: str = None,
-    attachments: list = None,
-    embedded_images: list = None
-):
-    """Send an email with optional HTML content, plain text, attachments, and embedded images."""
-    required_env_vars = ["SMTP_HOST", "SMTP_PORT", "SMTP_EMAIL", "SMTP_PASSWORD"]
-    missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-    if missing_vars:
-        logger.error(f"Missing environment variables: {', '.join(missing_vars)}")
-        raise ValueError(f"Missing environment variables: {', '.join(missing_vars)}")
-    
+    html_content: str,
+    text_content: str,
+    attachments: Optional[List[str]] = None,
+    embedded_images: Optional[List[Tuple[str, str, str]]] = None
+) -> bool:
+    """
+    Send an email with optional attachments and embedded images using Gmail SMTP.
+
+    Args:
+        to_email: Recipient email address.
+        subject: Email subject.
+        html_content: HTML content of the email.
+        text_content: Plain text content of the email.
+        attachments: List of file paths for attachments.
+        embedded_images: List of tuples (cid, base64_data, mime_type) for embedded images.
+
+    Returns:
+        bool: True if email was sent successfully, False otherwise.
+
+    Raises:
+        ValueError: If email configuration is missing in production.
+        HTTPException: If email sending fails in production.
+    """
+    email_host = os.getenv("EMAIL_HOST", "smtp.gmail.com")
+    email_port = os.getenv("EMAIL_PORT", "587")
+    email_user = os.getenv("EMAIL_USER", "snapfix@momntum-ai.com")
+    email_password = os.getenv("EMAIL_PASSWORD")
+
+    if not all([email_host, email_port, email_user, email_password]):
+        logger.error("Missing environment variables: EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASSWORD")
+        if os.getenv("ENV") == "production":
+            raise ValueError("Missing email configuration in production")
+        logger.warning("Skipping email sending due to missing configuration")
+        return False
+
+    msg = MIMEMultipart("related")
+    msg["From"] = email_user
+    msg["To"] = to_email
+    msg["Subject"] = subject
+
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(text_content, "plain"))
+    alt.attach(MIMEText(html_content, "html"))
+    msg.attach(alt)
+
+    if embedded_images:
+        for cid, base64_data, mime_type in embedded_images:
+            try:
+                img_data = base64.b64decode(base64_data)
+                img = MIMEImage(img_data, _subtype=mime_type.split("/")[-1])
+                img.add_header("Content-ID", f"<{cid}>")
+                msg.attach(img)
+                logger.debug(f"Embedded image {cid} added to email")
+            except Exception as e:
+                logger.error(f"Failed to embed image {cid}: {str(e)}")
+                continue
+
+    if attachments:
+        for file_path in attachments:
+            try:
+                with open(file_path, "rb") as f:
+                    part = MIMEText(f.read(), "base64", "utf-8")
+                    part.add_header("Content-Disposition", f"attachment; filename={os.path.basename(file_path)}")
+                    msg.attach(part)
+                    logger.debug(f"Attached file {file_path} to email")
+            except Exception as e:
+                logger.error(f"Failed to attach file {file_path}: {str(e)}")
+                continue
+
     try:
-        msg = MIMEMultipart('mixed')
-        msg['From'] = os.getenv("SMTP_EMAIL")
-        msg['To'] = to_email
-        msg['Subject'] = subject
-
-        if html_content or text_content:
-            msg_alternative = MIMEMultipart('alternative')
-            msg.attach(msg_alternative)
-
-            if text_content:
-                part1 = MIMEText(text_content, 'plain')
-                msg_alternative.attach(part1)
-
-            if html_content:
-                part2 = MIMEText(html_content, 'html')
-                msg_alternative.attach(part2)
-
-        if attachments:
-            for file_content, filename, content_type in attachments:
-                part = MIMEBase('application', 'octet-stream')
-                part.set_payload(file_content)
-                encoders.encode_base64(part)
-                part.add_header(
-                    'Content-Disposition',
-                    f'attachment; filename={filename}'
-                )
-                msg.attach(part)
-
-        if embedded_images:
-            for cid, content, content_type in embedded_images:
-                part = MIMEBase('image', content_type.split('/')[-1])
-                part.set_payload(base64.b64decode(content))
-                encoders.encode_base64(part)
-                part.add_header('Content-ID', f'<{cid}>')
-                part.add_header('Content-Disposition', 'inline', filename=cid)
-                msg.attach(part)
-
-        with smtplib.SMTP(os.getenv("SMTP_HOST"), int(os.getenv("SMTP_PORT"))) as server:
-            server.starttls()
-            server.login(os.getenv("SMTP_EMAIL"), os.getenv("SMTP_PASSWORD"))
-            server.send_message(msg)
+        logger.debug(f"Connecting to SMTP server {email_host}:{email_port} as {email_user}")
+        server = smtplib.SMTP(email_host, int(email_port))
+        server.starttls()
+        logger.debug(f"Logging in to SMTP server as {email_user}")
+        server.login(email_user, email_password)
+        logger.debug(f"Sending email to {to_email} with subject: {subject}")
+        server.send_message(msg)
+        server.quit()
         logger.info(f"Email sent successfully to {to_email}")
+        return True
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error(f"SMTP authentication failed for {email_user}: {str(e)}")
+        if os.getenv("ENV") == "production":
+            raise HTTPException(status_code=500, detail="SMTP authentication failed")
+        return False
+    except smtplib.SMTPConnectError as e:
+        logger.error(f"Failed to connect to SMTP server {email_host}:{email_port}: {str(e)}")
+        if os.getenv("ENV") == "production":
+            raise HTTPException(status_code=500, detail=f"SMTP connection failed: {str(e)}")
+        return False
+    except smtplib.SMTPServerDisconnected as e:
+        logger.error(f"SMTP server disconnected during operation: {str(e)}")
+        if os.getenv("ENV") == "production":
+            raise HTTPException(status_code=500, detail=f"SMTP server disconnected: {str(e)}")
+        return False
     except Exception as e:
-        logger.error(f"Failed to send email to {to_email}: {e}")
-        raise
+        logger.error(f"Failed to send email to {to_email}: {str(e)}")
+        if os.getenv("ENV") == "production":
+            raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+        return False

@@ -90,7 +90,11 @@ def generate_report(image_content: bytes, description: str, issue_type: str, sev
                     issue_id: str, confidence: float, category: str, priority: str) -> dict:
     try:
         model = genai.GenerativeModel("gemini-1.5-flash")
-        location_str = f"{address} (Coordinates: {latitude}, {longitude})" if latitude and longitude else address or "Unknown Address"
+        location_str = (
+            address if address and address.lower() != "not specified"
+            else f"Coordinates: {latitude}, {longitude}" if latitude and longitude
+            else "Unknown Location"
+        )
         department = issue_department_map.get(issue_type, "City Department")
         map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
 
@@ -130,7 +134,7 @@ Return this structure:
     "severity": "{severity.lower()}",
     "confidence": {confidence},
     "category": "{category}",
-    "summary_explanation": "Summary of the issue based on AI analysis of the description and image."
+    "summary_explanation": "Write a 4 to 5 line detailed explanation based on the provided image and description. Mention what visual elements helped identify the issue, how the description supported the classification, and specify the location clearly. The tone should be professional and focused on public infrastructure impact."
   }},
   "detailed_analysis": {{
     "root_causes": "Possible causes of the issue.",
