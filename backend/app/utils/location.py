@@ -90,7 +90,7 @@ def get_authority(address: str, issue_type: str, latitude: float, longitude: flo
 
         business_department_emails = {
             "property_damage": [
-                {"name": "Property Management", "email": "rishav@momntumai.org", "type": "property_management"}
+                {"name": "Property Management", "email": "rishav@momntumai.com", "type": "property_management"}
             ],
             "structural_damage": [
                 {"name": "Maintenance Department", "email": "chrishabh2002@gmail.com", "type": "maintenance"}
