@@ -3,44 +3,50 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from routes.issues import router as issues_router
 import logging
+import os
+import uvicorn
 
+# Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Create FastAPI app
 app = FastAPI()
 
-# Enable CORS for frontend access (Vite app running on http://localhost:5173)
+# Enable CORS for frontend access (production & local dev)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://snapfix-ai-1.onrender.com", "http://localhost:5173"],
+    allow_origins=[
+        "https://snapfix-ai-1.onrender.com",  # ✅ Frontend URL on Render
+        "http://localhost:5173"               # ✅ For local development
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Root route to confirm backend is running
+# Root route to test backend is running
 @app.get("/")
 def read_root():
     logger.info("Root endpoint accessed")
     return {"message": "SnapFix AI backend is up and running!"}
 
-# Handle favicon requests to avoid 404 in browser
+# Favicon route (optional)
 @app.get("/favicon.ico")
 async def favicon():
     logger.info("Favicon requested")
-    # Ensure static/favicon.ico exists; create a placeholder if needed
     return FileResponse("static/favicon.ico")
 
-# Include issue-related routes under /api prefix
+# Include your API routes
 app.include_router(issues_router, prefix="/api")
 
-# Log startup
+# Optional: log when the app starts
 @app.on_event("startup")
 async def startup_event():
-    logger.info("SnapFix AI backend started")
+    logger.info("SnapFix AI backend started successfully.")
 
-# Run the app
+# Run the app (Render will inject the PORT)
 if __name__ == "__main__":
-    import uvicorn
-    logger.info("Starting Uvicorn server")
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 10000))  # Use the PORT provided by Render
+    logger.info(f"Starting server on port {port}")
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
