@@ -12,7 +12,7 @@ app = FastAPI()
 # Enable CORS for frontend access (Vite app running on http://localhost:5173)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["https://snapfix-ai.onrender.com", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
