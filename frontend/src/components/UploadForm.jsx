@@ -131,7 +131,7 @@ function UploadForm({ setStatus, fetchIssues }) {
     }
 
     try {
-      const response = await fetch('http://localhost:8000/api/issues', {
+      const response = await fetch('https://snapfix-ai.onrender.com/api/issues', {
         method: 'POST',
         body: formData,
       });
@@ -183,7 +183,7 @@ function UploadForm({ setStatus, fetchIssues }) {
     setStatus('Submitting report...');
   
     try {
-      const response = await fetch(`http://localhost:8000/api/issues/${issueId}/accept`, {
+      const response = await fetch(`https://snapfix-ai.onrender.com/api/issues/${issueId}/accept`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ edited_report: editedReport }),
@@ -228,7 +228,7 @@ function UploadForm({ setStatus, fetchIssues }) {
     setStatus('Generating updated report...');
 
     try {
-      const response = await fetch(`http://localhost:8000/api/issues/${issueId}/decline`, {
+      const response = await fetch(`https://snapfix-ai.onrender.com/api/issues/${issueId}/decline`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decline_reason: declineReason, edited_report: editedReport }),
