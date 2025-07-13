@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 logger.info(f"Using PyMongo version: {pymongo.__version__}")
 
 # Database connection setup
-MONGO_URI = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
+MONGO_URI = os.getenv("MONGODB_URL", "mongodb+srv://<snapfix>:<Kvq1UydKEusfTQel>@cluster0.mongodb.net/snapfix?retryWrites=true&w=majority")
 DB_NAME = os.getenv("MONGODB_NAME", "snapfix")
 
 # Parse database name from MONGO_URI if provided
@@ -113,7 +113,7 @@ def store_issue(
 
         # Validate authority fields
         if not authority_email or not authority_name or None in authority_email or None in authority_name:
-            authority_email = ["snapfix@momntum-ai.com"]
+            authority_email = ["snapfix@momntumai.com"]
             authority_name = ["City Department"]
             logger.warning(f"No valid authorities provided for issue {issue_id}. Using defaults.")
         elif len(authority_email) != len(authority_name):
@@ -203,13 +203,13 @@ def get_issues() -> list:
             issue["category"] = issue.get("category", "Public")
             issue["priority"] = issue.get("priority", "Medium")
             # Clean authority_email
-            authority_email = issue.get("authority_email", ["snapfix@momntum-ai.com"])
+            authority_email = issue.get("authority_email", ["snapfix@momntumai.com"])
             if isinstance(authority_email, list):
                 authority_email = [str(email) for email in authority_email if email is not None and isinstance(email, str)]
                 if not authority_email:
                     authority_email = ["snapfix@momntum-ai.com"]
             else:
-                authority_email = [str(authority_email)] if authority_email else ["snapfix@momntum-ai.com"]
+                authority_email = [str(authority_email)] if authority_email else ["snapfix@momntumai.com"]
             issue["authority_email"] = authority_email
             # Clean authority_name
             authority_name = issue.get("authority_name", ["City Department"])
@@ -249,9 +249,9 @@ def get_report(issue_id: str) -> dict:
         if isinstance(authority_email, list):
             authority_email = [str(email) for email in authority_email if email is not None and isinstance(email, str)]
             if not authority_email:
-                authority_email = ["snapfix@momntum-ai.com"]
+                authority_email = ["snapfix@momntumai.com"]
         else:
-            authority_email = [str(authority_email)] if authority_email else ["snapfix@momntum-ai.com"]
+            authority_email = [str(authority_email)] if authority_email else ["snapfix@momntumai.com"]
         issue["authority_email"] = authority_email
         # Clean authority_name
         authority_name = issue.get("authority_name", ["City Department"])

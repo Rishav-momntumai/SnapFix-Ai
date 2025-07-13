@@ -753,7 +753,7 @@ async def decline_issue(issue_id: str, decline_request: DeclineRequest):
     return IssueResponse(id=issue_id, message="Report updated based on feedback. Please review again", report={
         "issue_id": issue_id,
         "report": updated_report,
-        "authority_email": issue.get("authority_email", ["snapfix@momntum-ai.com"]),
+        "authority_email": issue.get("authority_email", ["snapfix@momntumai.com"]),
         "authority_name": issue.get("authority_name", ["City Department"]),
         "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
         "timezone_name": issue.get("timezone_name", "UTC"),
@@ -773,14 +773,14 @@ async def list_issues():
                     issue['timestamp'] = issue['timestamp'].isoformat()
                 
                 # Clean authority_email and authority_name
-                authority_email = issue.get("authority_email", ["snapfix@momntum-ai.com"])
+                authority_email = issue.get("authority_email", ["snapfix@momntumai.com"])
                 if isinstance(authority_email, list):
                     # Filter out None and non-string values
                     authority_email = [str(email) for email in authority_email if email is not None and isinstance(email, str)]
                     if not authority_email:  # If list is empty after filtering
-                        authority_email = ["snapfix@momntum-ai.com"]
+                        authority_email = ["snapfix@momntumai.com"]
                 else:
-                    authority_email = [str(authority_email)] if authority_email else ["snapfix@momntum-ai.com"]
+                    authority_email = [str(authority_email)] if authority_email else ["snapfix@momntumai.com"]
 
                 authority_name = issue.get("authority_name", ["City Department"])
                 if isinstance(authority_name, list):
