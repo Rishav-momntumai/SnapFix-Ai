@@ -713,15 +713,18 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         }
     )
 
-@router.post("/issues/{issue_id}/decline", response_model=IssueResponse)
-async def decline_issue(issue_id: str, decline_request: DeclineRequest):
+@router.post("/issues/{issue_id}/accept", response_model=IssueResponse)
+async def accept_issue(issue_id: str, request: AcceptRequest):
+    logger.debug(f"Processing accept request for issue {issue_id}")
     try:
         db = get_db()
         fs = get_fs()
+        logger.debug("Database and GridFS initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize database for issue {issue_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database initialization failed: {str(e)}")
     
+    # Fetch issue from MongoDB
     try:
         issue = db.issues.find_one({"_id": issue_id})
         if not issue:
@@ -734,14 +737,34 @@ async def decline_issue(issue_id: str, decline_request: DeclineRequest):
         logger.error(f"Failed to fetch issue {issue_id} from database: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch issue: {str(e)}")
     
+    # Validate required fields
     required_fields = ["issue_type", "description", "address", "image_id", "report"]
     missing_fields = [field for field in required_fields if field not in issue or issue[field] is None]
     if missing_fields:
         logger.error(f"Issue {issue_id} missing required fields: {missing_fields}")
         raise HTTPException(status_code=400, detail=f"Issue missing required fields: {missing_fields}")
     
+    # Use edited report if provided, else use original
+    report = request.edited_report if request.edited_report else issue["report"]
+    if request.edited_report:
+        try:
+            EditedReport(**request.edited_report)  # Validate edited report
+            report["template_fields"] = report.get("template_fields", issue["report"]["template_fields"])
+            report["issue_overview"] = report.get("issue_overview", issue["report"]["issue_overview"])
+            report["recommended_actions"] = report.get("recommended_actions", issue["report"]["recommended_actions"])
+            report["detailed_analysis"] = report.get("detailed_analysis", issue["report"]["detailed_analysis"])
+            report["responsible_authorities_or_parties"] = report.get("responsible_authorities_or_parties", issue["report"]["responsible_authorities_or_parties"])
+            report["template_fields"].pop("tracking_link", None)
+        except Exception as e:
+            logger.error(f"Invalid edited report for issue {issue_id}: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Invalid edited report: {str(e)}")
+    else:
+        report["template_fields"].pop("tracking_link", None)
+    
+    # Fetch image from GridFS
     try:
         image_content = fs.get(ObjectId(issue["image_id"])).read()
+        logger.debug(f"Image {issue['image_id']} retrieved for issue {issue_id}")
     except gridfs.errors.NoFile:
         logger.error(f"Image not found for image_id {issue['image_id']} in issue {issue_id}")
         raise HTTPException(status_code=404, detail=f"Image not found for issue {issue_id}")
@@ -749,51 +772,76 @@ async def decline_issue(issue_id: str, decline_request: DeclineRequest):
         logger.error(f"Failed to fetch image for issue {issue_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch image: {str(e)}")
     
+    # Fetch authorities
     try:
-        if decline_request.edited_report:
-            updated_report = decline_request.edited_report
-            EditedReport(**updated_report)
-            updated_report["template_fields"] = updated_report.get("template_fields", issue["report"]["template_fields"])
-            updated_report["issue_overview"] = updated_report.get("issue_overview", issue["report"]["issue_overview"])
-            updated_report["recommended_actions"] = updated_report.get("recommended_actions", issue["report"]["recommended_actions"])
-            updated_report["detailed_analysis"] = updated_report.get("detailed_analysis", issue["report"]["detailed_analysis"])
-            updated_report["responsible_authorities_or_parties"] = updated_report.get("responsible_authorities_or_parties", issue["report"]["responsible_authorities_or_parties"])
-        else:
-            updated_report = generate_report(
-                image_content=image_content,
-                description=issue.get("description", "No description"),
-                issue_type=issue.get("issue_type", "Unknown Issue"),
-                severity=issue.get("severity", "Medium"),
-                address=issue.get("address", "Unknown Address"),
-                latitude=issue.get("latitude", 0.0),
-                longitude=issue.get("longitude", 0.0),
-                issue_id=issue_id,
-                confidence=issue.get("report", {}).get("issue_overview", {}).get("confidence", 0.0),
-                category=issue.get("category", "Public"),
-                priority=issue.get("priority", "Medium"),
-                decline_reason=decline_request.decline_reason
-            )
-        updated_report["template_fields"].pop("tracking_link", None)
-        
-        update_pending_issue(
-            issue_id=issue_id,
-            report=updated_report,
-            decline_reason=decline_request.decline_reason
-        )
+        authorities = get_authority(
+            issue.get("address", "Unknown Address"),
+            issue.get("issue_type", "Unknown Issue"),
+            issue.get("latitude", 0.0),
+            issue.get("longitude", 0.0),
+            issue.get("category", "Public")
+        ) or [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
+        logger.debug(f"Authorities for issue {issue_id}: {authorities}")
     except Exception as e:
-        logger.error(f"Failed to process decline for issue {issue_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to process decline: {str(e)}")
+        logger.warning(f"Failed to fetch authorities for issue {issue_id}: {str(e)}. Using default authority.")
+        authorities = [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
+    
+    # Send emails
+    email_success = False
+    email_errors = []
+    try:
+        email_success = send_authority_email(
+            authorities=authorities,
+            issue_type=issue.get("issue_type", "Unknown Issue"),
+            final_address=issue.get("address", "Unknown Address"),
+            timestamp_formatted=issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+            report=report,
+            description=issue.get("description", "No description provided"),
+            confidence=issue.get("report", {}).get("issue_overview", {}).get("confidence", 0.0),
+            category=issue.get("category", "Public"),
+            timezone_name=issue.get("timezone_name", "UTC"),
+            latitude=issue.get("latitude", 0.0),
+            longitude=issue.get("longitude", 0.0),
+            image_content=image_content
+        )
+        if not email_success:
+            email_errors = db.issues.find_one({"_id": issue_id}).get("email_errors", [])
+            logger.warning(f"Email sending failed for issue {issue_id}: {email_errors}")
+    except Exception as e:
+        logger.error(f"Failed to send authority emails for issue {issue_id}: {str(e)}")
+        email_errors = [str(e)]
+    
+    # Update issue status and email status
+    try:
+        update_issue_status(issue_id, "accepted")
+        db.issues.update_one(
+            {"_id": issue_id},
+            {
+                "$set": {
+                    "report": report,
+                    "email_status": "sent" if email_success else "failed",
+                    "email_errors": email_errors
+                }
+            }
+        )
+        logger.debug(f"Issue {issue_id} updated with email_status: {'sent' if email_success else 'failed'}")
+    except Exception as e:
+        logger.error(f"Failed to update issue {issue_id} status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update issue status: {str(e)}")
 
-    return IssueResponse(id=issue_id, message="Report updated based on feedback. Please review again", report={
-        "issue_id": issue_id,
-        "report": updated_report,
-        "authority_email": issue.get("authority_email", ["snapfix@momntumai.com"]),
-        "authority_name": issue.get("authority_name", ["City Department"]),
-        "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
-        "timezone_name": issue.get("timezone_name", "UTC"),
-        "image_content": base64.b64encode(image_content).decode('utf-8')
-    })
-
+    logger.info(f"Issue {issue_id} accepted and reported to authorities: {[auth['email'] for auth in authorities]}. Email success: {email_success}")
+    return IssueResponse(
+        id=issue_id,
+        message=f"Thank you for using SnapFix! Issue accepted and {'emails sent successfully' if email_success else 'email sending failed: ' + '; '.join(email_errors)}",
+        report={
+            "issue_id": issue_id,
+            "report": report,
+            "authority_email": [auth["email"] for auth in authorities],
+            "authority_name": [auth["name"] for auth in authorities],
+            "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+            "timezone_name": issue.get("timezone_name", "UTC")
+        }
+    )
 @router.get("/issues", response_model=List[Issue])
 async def list_issues():
     try:
