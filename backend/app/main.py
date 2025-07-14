@@ -22,12 +22,21 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://snapfix-ai-1.onrender.com",  # Frontend URL on Render
+        "https://snapfix-ai.onrender.com",    # Backend URL (in case of same-origin requests)
         "http://localhost:5173"               # Local development
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Log all incoming requests
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger.debug(f"Incoming request: {request.method} {request.url} from {request.client.host}")
+    response = await call_next(request)
+    logger.debug(f"Response status: {response.status_code} for {request.method} {request.url}")
+    return response
 
 # Global exception handler for unhandled errors
 @app.exception_handler(Exception)
