@@ -1,83 +1,52 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from routes.issues import router as issues_router
 import logging
 import os
 import uvicorn
 
-# Setup logging with detailed format
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
+# Setup logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Create FastAPI app
-app = FastAPI(title="SnapFix AI Backend")
+app = FastAPI()
 
-# Enable CORS for frontend access
+# Enable CORS for frontend access (production & local dev)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://snapfix-ai-1.onrender.com",  # Frontend URL on Render
-        "http://localhost:5173"               # Local development
+        "https://snapfix-ai-1.onrender.com",  # ✅ Frontend URL on Render
+        "http://localhost:5173"               # ✅ For local development
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Global exception handler for unhandled errors
-@app.exception_handler(Exception)
-async def custom_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception in {request.method} {request.url}: {str(exc)}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"detail": f"Internal server error: {str(exc)}"}
-    )
-
-# Root route to test backend
+# Root route to test backend is running
 @app.get("/")
-async def read_root():
-    logger.debug("Root endpoint accessed")
+def read_root():
+    logger.info("Root endpoint accessed")
     return {"message": "SnapFix AI backend is up and running!"}
 
-# Favicon route
+# Favicon route (optional)
 @app.get("/favicon.ico")
 async def favicon():
-    logger.debug("Favicon requested")
-    favicon_path = "static/favicon.ico"
-    if os.path.exists(favicon_path):
-        return FileResponse(favicon_path)
-    logger.warning("Favicon file not found")
-    raise HTTPException(status_code=404, detail="Favicon not found")
+    logger.info("Favicon requested")
+    return FileResponse("static/favicon.ico")
 
-# Health check endpoint
-@app.get("/health")
-async def health_check():
-    logger.debug("Health check endpoint called")
-    try:
-        from services.mongodb_service import get_db
-        db = get_db()
-        db.command("ping")
-        logger.debug("Database ping successful")
-        return {"status": "healthy", "database": "connected"}
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        raise HTTPException(status_code=503, detail=f"Database unavailable: {str(e)}")
-
-# Include API routes
+# Include your API routes
 app.include_router(issues_router, prefix="/api")
 
-# Log startup
+# Optional: log when the app starts
 @app.on_event("startup")
 async def startup_event():
-    logger.info("SnapFix AI backend started successfully")
+    logger.info("SnapFix AI backend started successfully.")
 
-# Run the app
+# Run the app (Render will inject the PORT)
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))  # Render injects PORT
+    port = int(os.environ.get("PORT", 10000))  # Use the PORT provided by Render
     logger.info(f"Starting server on port {port}")
-    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="debug")
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
