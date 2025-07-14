@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 logger.info(f"Using PyMongo version: {pymongo.__version__}")
 
 # Database connection setup
-MONGO_URI = os.getenv("MONGODB_URL", "mongodb://snapfix:Kvq1UydKEusfTQel@cluster0-shard-00-00.qb5mr3a.mongodb.net:27017,cluster0-shard-00-01.qb5mr3a.mongodb.net:27017,cluster0-shard-00-02.qb5mr3a.mongodb.net:27017/snapfix?ssl=true&replicaSet=atlas-qb5mr3-shard-0&authSource=admin&retryWrites=true&w=majority")
+MONGO_URI = os.getenv("MONGODB_URL", "snapfix:Kvq1UydKEusfTQel@cluster0.qb5mr3a.mongodb.net/snapfix?retryWrites=true&w=majority")
 DB_NAME = os.getenv("MONGODB_NAME", "snapfix")
 
 # Parse database name from MONGO_URI if provided
