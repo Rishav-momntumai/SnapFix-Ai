@@ -126,7 +126,7 @@ Photo Evidence:
 • File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
 • AI Detection: "{report.get('template_fields', {}).get('ai_tag', 'N/A')}" - Confidence: {confidence}%
 
-Please respond urgently. Contact snapfix@momntum-ai.com for further details.
+Please respond urgently. Contact snapfix@momntumai.com for further details.
 
 Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
 """
@@ -154,7 +154,7 @@ Photo Evidence:
 • File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
 • AI Detection: "{report.get('template_fields', {}).get('ai_tag', 'N/A')}" - Confidence: {confidence}%
 
-Please respond promptly. Contact snapfix@momntum-ai.com for further details.
+Please respond promptly. Contact snapfix@momntumai.com for further details.
 
 Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
 """
@@ -182,7 +182,7 @@ Photo Evidence:
 • File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
 • AI Detection: "{report.get('template_fields', {}).get('ai_tag', 'N/A')}" - Confidence: {confidence}%
 
-Please address this issue. Contact snapfix@momntum-ai.com for further details.
+Please address this issue. Contact snapfix@momntumai.com for further details.
 
 Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
 """
@@ -210,7 +210,7 @@ Photo Evidence:
 • File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
 • AI Detection: "{report.get('template_fields', {}).get('ai_tag', 'N/A')}" - Confidence: {confidence}%
 
-Please respond to snapfix@momntum-ai.com with any feedback.
+Please respond to snapfix@momntumai.com with any feedback.
 
 Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
 """
@@ -236,7 +236,7 @@ def send_authority_email(
 ):
     if not authorities:
         logger.warning("No authorities provided, using default")
-        authorities = [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
+        authorities = [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
 
     logo_base64 = get_logo_base64()
     issue_image_base64 = base64.b64encode(image_content).decode('utf-8')
@@ -453,7 +453,7 @@ def send_authority_email(
             </div>
             <div style="background: #f5f7fa; padding: 15px; border-radius: 8px; margin-top: 20px;">
                 <div style="font-weight: bold; margin-bottom: 10px;">📩 Need to respond?</div>
-                <p>Reply to this email or forward to <a href="mailto:snapfix@momntum-ai.com">snapfix@momntum-ai.com</a> with your comments.</p>
+                <p>Reply to this email or forward to <a href="mailto:snapfix@momntumai.com">snapfix@momntumai.com</a> with your comments.</p>
             </div>
         </div>
         <div class="footer">
@@ -554,7 +554,7 @@ async def create_issue(
         raise HTTPException(status_code=500, detail=f"Failed to generate report: {str(e)}")
     
     authorities = get_authority(final_address, issue_type, latitude, longitude, category)
-    authority_emails = [auth["email"] for auth in authorities] or ["snapfix@momntum-ai.com"]
+    authority_emails = [auth["email"] for auth in authorities] or ["snapfix@momntumai.com"]
     authority_names = [auth["name"] for auth in authorities] or ["City Department"]
     
     timezone_name = get_timezone_name(latitude, longitude) or "UTC"
@@ -664,11 +664,11 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
             issue.get("latitude", 0.0),
             issue.get("longitude", 0.0),
             issue.get("category", "Public")
-        ) or [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
+        ) or [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
         logger.debug(f"Authorities for issue {issue_id}: {authorities}")
     except Exception as e:
         logger.error(f"Failed to fetch authorities for issue {issue_id}: {str(e)}")
-        authorities = [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
+        authorities = [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
     
     # Send emails
     email_success = False
@@ -787,7 +787,7 @@ async def decline_issue(issue_id: str, decline_request: DeclineRequest):
     return IssueResponse(id=issue_id, message="Report updated based on feedback. Please review again", report={
         "issue_id": issue_id,
         "report": updated_report,
-        "authority_email": issue.get("authority_email", ["snapfix@momntum-ai.com"]),
+        "authority_email": issue.get("authority_email", ["snapfix@momntumai.com"]),
         "authority_name": issue.get("authority_name", ["City Department"]),
         "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
         "timezone_name": issue.get("timezone_name", "UTC"),
@@ -807,14 +807,14 @@ async def list_issues():
                     issue['timestamp'] = issue['timestamp'].isoformat()
                 
                 # Clean authority_email and authority_name
-                authority_email = issue.get("authority_email", ["snapfix@momntum-ai.com"])
+                authority_email = issue.get("authority_email", ["snapfix@momntumai.com"])
                 if isinstance(authority_email, list):
                     # Filter out None and non-string values
                     authority_email = [str(email) for email in authority_email if email is not None and isinstance(email, str)]
                     if not authority_email:  # If list is empty after filtering
-                        authority_email = ["snapfix@momntum-ai.com"]
+                        authority_email = ["snapfix@momntumai.com"]
                 else:
-                    authority_email = [str(authority_email)] if authority_email else ["snapfix@momntum-ai.com"]
+                    authority_email = [str(authority_email)] if authority_email else ["snapfix@momntumai.com"]
 
                 authority_name = issue.get("authority_name", ["City Department"])
                 if isinstance(authority_name, list):
