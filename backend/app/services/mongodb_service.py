@@ -1,32 +1,23 @@
 from pymongo import MongoClient
-from pymongo.errors import AutoReconnect, ConnectionError, ServerSelectionTimeoutError
 import gridfs
-import os
 import logging
-import time
-import dns.resolver
 from datetime import datetime
-from urllib.parse import urlparse
-from typing import Optional, List
+import os
 from dotenv import load_dotenv
+from typing import Optional, List
+from pymongo.errors import ConnectionFailure
+import time
+from urllib.parse import urlparse
 import pymongo
 
-# Load environment variables
 load_dotenv()
-
-# Setup logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
 logger = logging.getLogger(__name__)
 
 # Log PyMongo version for debugging
 logger.info(f"Using PyMongo version: {pymongo.__version__}")
 
 # Database connection setup
-MONGO_URI = os.getenv("MONGODB_URL", "mongodb+srv://snapfix:Kvq1UydKEusfTQel@cluster0.qb5mr3a.mongodb.net/snapfix?retryWrites=true&w=majority&appName=Cluster0")
+MONGO_URI = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
 DB_NAME = os.getenv("MONGODB_NAME", "snapfix")
 
 # Parse database name from MONGO_URI if provided
@@ -39,62 +30,28 @@ client: Optional[MongoClient] = None
 db = None
 fs = None
 
-def resolve_dns(hostname):
-    """Attempt to resolve DNS for the given hostname."""
-    try:
-        answers = dns.resolver.resolve(hostname, 'A')
-        resolved_ips = [str(rdata) for rdata in answers]
-        logger.debug(f"DNS resolution for {hostname}: {resolved_ips}")
-        return resolved_ips
-    except Exception as e:
-        logger.error(f"DNS resolution failed for {hostname}: {str(e)}", exc_info=True)
-        return None
-
-def initialize_db(max_retries=5, retry_delay=10):
+def initialize_db(max_retries=3, retry_delay=5):
     """Initialize the MongoDB connection and GridFS with retry logic"""
     global client, db, fs
-    if not MONGO_URI:
-        logger.error("MONGODB_URL not set in environment variables")
-        raise ValueError("MONGODB_URL not set")
-
-    # Check DNS resolution for MongoDB hosts
-    hosts = [
-        "cluster0-shard-00-00.qb5mr3a.mongodb.net",
-        "cluster0-shard-00-01.qb5mr3a.mongodb.net",
-        "cluster0-shard-00-02.qb5mr3a.mongodb.net"
-    ]
-    for host in hosts:
-        resolved = resolve_dns(host)
-        if not resolved:
-            logger.warning(f"Could not resolve DNS for {host}")
-
-    for attempt in range(1, max_retries + 1):
+    for attempt in range(max_retries):
         try:
-            logger.debug(f"Attempting to connect to MongoDB with URI: {MONGO_URI[:30]}... (attempt {attempt}/{max_retries})")
-            client = MongoClient(
-                MONGO_URI,
-                serverSelectionTimeoutMS=10000,
-                connectTimeoutMS=30000,
-                socketTimeoutMS=30000,
-                retryWrites=True,
-                w='majority'
-            )
+            client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+            # Test connection
             client.admin.command('ping')
             db = client[DB_NAME]
             fs = gridfs.GridFS(db)
             logger.info(f"Database connection established to {DB_NAME}")
             return
-        except (AutoReconnect, ConnectionError, ServerSelectionTimeoutError) as e:
-            logger.error(f"Failed to connect to MongoDB (attempt {attempt}/{max_retries}): {str(e)}", exc_info=True)
-            if attempt < max_retries:
-                time.sleep(retry_delay * (2 ** (attempt - 1)))  # Exponential backoff
-            continue
+        except ConnectionFailure as e:
+            logger.error(f"Failed to connect to MongoDB (attempt {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay * (2 ** attempt))  # Exponential backoff
+            else:
+                logger.error("Max retries reached. Could not connect to MongoDB.")
+                raise RuntimeError(f"Failed to connect to MongoDB after {max_retries} attempts: {str(e)}")
         except Exception as e:
-            logger.error(f"Unexpected error during MongoDB initialization (attempt {attempt}/{max_retries}): {str(e)}", exc_info=True)
-            if attempt < max_retries:
-                time.sleep(retry_delay * (2 ** (attempt - 1)))
-            continue
-    raise RuntimeError(f"Failed to connect to MongoDB after {max_retries} attempts: {str(e)}")
+            logger.error(f"Unexpected error during MongoDB initialization: {str(e)}")
+            raise
 
 def get_db():
     """Get the database connection"""
@@ -156,7 +113,7 @@ def store_issue(
 
         # Validate authority fields
         if not authority_email or not authority_name or None in authority_email or None in authority_name:
-            authority_email = ["snapfix@momntum-ai.com"]
+            authority_email = ["snapfix@momntumai.com"]
             authority_name = ["City Department"]
             logger.warning(f"No valid authorities provided for issue {issue_id}. Using defaults.")
         elif len(authority_email) != len(authority_name):
@@ -246,13 +203,13 @@ def get_issues() -> list:
             issue["category"] = issue.get("category", "Public")
             issue["priority"] = issue.get("priority", "Medium")
             # Clean authority_email
-            authority_email = issue.get("authority_email", ["snapfix@momntum-ai.com"])
+            authority_email = issue.get("authority_email", ["snapfix@momntumai.com"])
             if isinstance(authority_email, list):
                 authority_email = [str(email) for email in authority_email if email is not None and isinstance(email, str)]
                 if not authority_email:
                     authority_email = ["snapfix@momntum-ai.com"]
             else:
-                authority_email = [str(authority_email)] if authority_email else ["snapfix@momntum-ai.com"]
+                authority_email = [str(authority_email)] if authority_email else ["snapfix@momntumai.com"]
             issue["authority_email"] = authority_email
             # Clean authority_name
             authority_name = issue.get("authority_name", ["City Department"])
@@ -292,9 +249,9 @@ def get_report(issue_id: str) -> dict:
         if isinstance(authority_email, list):
             authority_email = [str(email) for email in authority_email if email is not None and isinstance(email, str)]
             if not authority_email:
-                authority_email = ["snapfix@momntum-ai.com"]
+                authority_email = ["snapfix@momntumai.com"]
         else:
-            authority_email = [str(authority_email)] if authority_email else ["snapfix@momntum-ai.com"]
+            authority_email = [str(authority_email)] if authority_email else ["snapfix@momntumai.com"]
         issue["authority_email"] = authority_email
         # Clean authority_name
         authority_name = issue.get("authority_name", ["City Department"])
