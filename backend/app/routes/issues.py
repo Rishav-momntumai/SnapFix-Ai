@@ -1,4 +1,5 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from services.ai_service import classify_issue, generate_report
 from services.email_service import send_email
@@ -466,6 +467,7 @@ def send_authority_email(
 """
 
     errors = []
+    successful_emails = []
     for authority in authorities:
         try:
             subject, text_content = get_department_email_content(authority["type"], {
@@ -482,7 +484,7 @@ def send_authority_email(
                 "longitude": longitude
             })
             logger.debug(f"Sending email to {authority['email']} for {authority['type']} with subject: {subject}")
-            send_email(
+            success = send_email(
                 to_email=authority["email"],
                 subject=subject,
                 html_content=html_content,
@@ -490,13 +492,20 @@ def send_authority_email(
                 attachments=None,
                 embedded_images=embedded_images
             )
-            logger.info(f"Email sent to {authority['email']} for {authority['type']}")
+            if success:
+                successful_emails.append(authority["email"])
+                logger.info(f"Email sent successfully to {authority['email']} for {authority['type']}")
+            else:
+                logger.warning(f"Email sending failed for {authority['email']} without raising an exception")
+                errors.append(f"Email sending failed for {authority['email']}")
         except Exception as e:
             logger.error(f"Failed to send email to {authority['email']}: {str(e)}")
             errors.append(f"Failed to send email to {authority['email']}: {str(e)}")
     if errors:
-        logger.warning(f"Some emails failed for issue: {'; '.join(errors)}")
-        # Continue processing instead of raising error
+        logger.warning(f"Email sending issues: {'; '.join(errors)}")
+    if successful_emails:
+        logger.info(f"Emails sent successfully to: {', '.join(successful_emails)}")
+    return len(errors) == 0  # Return True if no errors
 
 @router.post("/issues", response_model=IssueResponse)
 async def create_issue(
@@ -510,7 +519,7 @@ async def create_issue(
         db = get_db()
         fs = get_fs()
     except Exception as e:
-        logger.error(f"Failed to initialize database: {e}")
+        logger.error(f"Failed to initialize database: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database initialization failed: {str(e)}")
     
     if not image.content_type.startswith("image/"):
@@ -573,7 +582,7 @@ async def create_issue(
             timezone_name=timezone_name
         )
     except Exception as e:
-        logger.error(f"Failed to store issue {issue_id}: {e}")
+        logger.error(f"Failed to store issue {issue_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to store issue: {str(e)}")
     
     return IssueResponse(
@@ -601,13 +610,17 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         raise HTTPException(status_code=500, detail=f"Database initialization failed: {str(e)}")
     
     # Fetch issue from MongoDB
-    issue = db.issues.find_one({"_id": issue_id})
-    if not issue:
-        logger.error(f"Issue {issue_id} not found in database")
-        raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
-    if issue.get("status") != "pending":
-        logger.warning(f"Issue {issue_id} already processed with status {issue.get('status')}")
-        raise HTTPException(status_code=400, detail="Issue already processed")
+    try:
+        issue = db.issues.find_one({"_id": issue_id})
+        if not issue:
+            logger.error(f"Issue {issue_id} not found in database")
+            raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
+        if issue.get("status") != "pending":
+            logger.warning(f"Issue {issue_id} already processed with status {issue.get('status')}")
+            raise HTTPException(status_code=400, detail="Issue already processed")
+    except Exception as e:
+        logger.error(f"Failed to fetch issue {issue_id} from database: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch issue: {str(e)}")
     
     # Validate required fields
     required_fields = ["issue_type", "description", "address", "image_id", "report"]
@@ -638,7 +651,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         image_content = fs.get(ObjectId(issue["image_id"])).read()
     except gridfs.errors.NoFile:
         logger.error(f"Image not found for image_id {issue['image_id']} in issue {issue_id}")
-        raise HTTPException(status_code=500, detail=f"Image not found for issue {issue_id}")
+        raise HTTPException(status_code=404, detail=f"Image not found for issue {issue_id}")
     except Exception as e:
         logger.error(f"Failed to fetch image for issue {issue_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch image: {str(e)}")
@@ -658,8 +671,9 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         authorities = [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
     
     # Send emails
+    email_success = False
     try:
-        send_authority_email(
+        email_success = send_authority_email(
             authorities=authorities,
             issue_type=issue.get("issue_type", "Unknown Issue"),
             final_address=issue.get("address", "Unknown Address"),
@@ -685,8 +699,19 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         logger.error(f"Failed to update issue {issue_id} status: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to update issue status: {str(e)}")
 
-    logger.info(f"Issue {issue_id} accepted and reported to authorities: {[auth['email'] for auth in authorities]}")
-    return IssueResponse(id=issue_id, message="Thank you for using SnapFix! Issue accepted and reported to authorities")
+    logger.info(f"Issue {issue_id} accepted and reported to authorities: {[auth['email'] for auth in authorities]}. Email success: {email_success}")
+    return IssueResponse(
+        id=issue_id,
+        message=f"Thank you for using SnapFix! Issue accepted and {'emails sent successfully' if email_success else 'email sending failed'}",
+        report={
+            "issue_id": issue_id,
+            "report": report,
+            "authority_email": [auth["email"] for auth in authorities],
+            "authority_name": [auth["name"] for auth in authorities],
+            "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+            "timezone_name": issue.get("timezone_name", "UTC")
+        }
+    )
 
 @router.post("/issues/{issue_id}/decline", response_model=IssueResponse)
 async def decline_issue(issue_id: str, decline_request: DeclineRequest):
@@ -694,14 +719,20 @@ async def decline_issue(issue_id: str, decline_request: DeclineRequest):
         db = get_db()
         fs = get_fs()
     except Exception as e:
-        logger.error(f"Failed to initialize database for issue {issue_id}: {e}")
+        logger.error(f"Failed to initialize database for issue {issue_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Database initialization failed: {str(e)}")
     
-    issue = db.issues.find_one({"_id": issue_id})
-    if not issue:
-        raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
-    if issue.get("status") != "pending":
-        raise HTTPException(status_code=400, detail="Issue already processed")
+    try:
+        issue = db.issues.find_one({"_id": issue_id})
+        if not issue:
+            logger.error(f"Issue {issue_id} not found in database")
+            raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
+        if issue.get("status") != "pending":
+            logger.warning(f"Issue {issue_id} already processed with status {issue.get('status')}")
+            raise HTTPException(status_code=400, detail="Issue already processed")
+    except Exception as e:
+        logger.error(f"Failed to fetch issue {issue_id} from database: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch issue: {str(e)}")
     
     required_fields = ["issue_type", "description", "address", "image_id", "report"]
     missing_fields = [field for field in required_fields if field not in issue or issue[field] is None]
@@ -711,8 +742,11 @@ async def decline_issue(issue_id: str, decline_request: DeclineRequest):
     
     try:
         image_content = fs.get(ObjectId(issue["image_id"])).read()
+    except gridfs.errors.NoFile:
+        logger.error(f"Image not found for image_id {issue['image_id']} in issue {issue_id}")
+        raise HTTPException(status_code=404, detail=f"Image not found for issue {issue_id}")
     except Exception as e:
-        logger.error(f"Failed to fetch image for issue {issue_id}: {e}")
+        logger.error(f"Failed to fetch image for issue {issue_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch image: {str(e)}")
     
     try:
@@ -747,13 +781,13 @@ async def decline_issue(issue_id: str, decline_request: DeclineRequest):
             decline_reason=decline_request.decline_reason
         )
     except Exception as e:
-        logger.error(f"Failed to process decline for issue {issue_id}: {e}")
+        logger.error(f"Failed to process decline for issue {issue_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to process decline: {str(e)}")
 
     return IssueResponse(id=issue_id, message="Report updated based on feedback. Please review again", report={
         "issue_id": issue_id,
         "report": updated_report,
-        "authority_email": issue.get("authority_email", ["snapfix@momntumai.com"]),
+        "authority_email": issue.get("authority_email", ["snapfix@momntum-ai.com"]),
         "authority_name": issue.get("authority_name", ["City Department"]),
         "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
         "timezone_name": issue.get("timezone_name", "UTC"),
@@ -773,14 +807,14 @@ async def list_issues():
                     issue['timestamp'] = issue['timestamp'].isoformat()
                 
                 # Clean authority_email and authority_name
-                authority_email = issue.get("authority_email", ["snapfix@momntumai.com"])
+                authority_email = issue.get("authority_email", ["snapfix@momntum-ai.com"])
                 if isinstance(authority_email, list):
                     # Filter out None and non-string values
                     authority_email = [str(email) for email in authority_email if email is not None and isinstance(email, str)]
                     if not authority_email:  # If list is empty after filtering
-                        authority_email = ["snapfix@momntumai.com"]
+                        authority_email = ["snapfix@momntum-ai.com"]
                 else:
-                    authority_email = [str(authority_email)] if authority_email else ["snapfix@momntumai.com"]
+                    authority_email = [str(authority_email)] if authority_email else ["snapfix@momntum-ai.com"]
 
                 authority_name = issue.get("authority_name", ["City Department"])
                 if isinstance(authority_name, list):
@@ -810,17 +844,47 @@ async def update_status(issue_id: str, status_update: IssueStatusUpdate):
         db = get_db()
         updated = update_issue_status(issue_id, status_update.status)
         if not updated:
+            logger.error(f"Issue {issue_id} not found for status update")
             raise HTTPException(status_code=404, detail="Issue not found")
+        logger.info(f"Status updated for issue {issue_id} to {status_update.status}")
         return {"message": "Status updated successfully"}
     except Exception as e:
-        logger.error(f"Failed to update status for issue {issue_id}: {e}")
+        logger.error(f"Failed to update status for issue {issue_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to update status: {str(e)}")
+
+@router.get("/issues/{issue_id}/image")
+async def get_issue_image(issue_id: str):
+    try:
+        db = get_db()
+        fs = get_fs()
+        issue = db.issues.find_one({"_id": issue_id})
+        if not issue:
+            logger.error(f"Issue {issue_id} not found for image retrieval")
+            raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
+        image_id = issue.get("image_id")
+        if not image_id:
+            logger.error(f"No image_id found for issue {issue_id}")
+            raise HTTPException(status_code=404, detail=f"No image found for issue {issue_id}")
+        try:
+            image = fs.get(ObjectId(image_id))
+            logger.debug(f"Retrieved image {image_id} for issue {issue_id}")
+            return StreamingResponse(image, media_type="image/jpeg")
+        except gridfs.errors.NoFile:
+            logger.error(f"Image {image_id} not found in GridFS for issue {issue_id}")
+            raise HTTPException(status_code=404, detail=f"Image {image_id} not found")
+        except Exception as e:
+            logger.error(f"Failed to retrieve image {image_id} for issue {issue_id}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to retrieve image: {str(e)}")
+    except Exception as e:
+        logger.error(f"Failed to process image request for issue {issue_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process image request: {str(e)}")
 
 @router.get("/health")
 async def health_check():
     try:
         db = get_db()
         db.command("ping")
+        logger.debug("Health check passed: database connected")
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
