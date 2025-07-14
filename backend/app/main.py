@@ -22,7 +22,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://snapfix-ai-1.onrender.com",  # Frontend URL on Render
-        "https://snapfix-ai.onrender.com",    # Backend URL (in case of same-origin requests)
+        "https://snapfix-ai.onrender.com",    # Backend URL (for same-origin or misconfig)
         "http://localhost:5173"               # Local development
     ],
     allow_credentials=True,
@@ -34,9 +34,13 @@ app.add_middleware(
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     logger.debug(f"Incoming request: {request.method} {request.url} from {request.client.host}")
-    response = await call_next(request)
-    logger.debug(f"Response status: {response.status_code} for {request.method} {request.url}")
-    return response
+    try:
+        response = await call_next(request)
+        logger.debug(f"Response status: {response.status_code} for {request.method} {request.url}")
+        return response
+    except Exception as e:
+        logger.error(f"Error processing request {request.method} {request.url}: {str(e)}", exc_info=True)
+        raise
 
 # Global exception handler for unhandled errors
 @app.exception_handler(Exception)

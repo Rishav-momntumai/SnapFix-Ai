@@ -17,7 +17,12 @@ import pytz
 from typing import List, Optional, Dict, Any
 import gridfs.errors
 
-logging.basicConfig(level=logging.INFO)
+# Setup logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -25,7 +30,7 @@ router = APIRouter()
 class IssueResponse(BaseModel):
     id: str
     message: str
-    report: dict = None
+    report: Optional[Dict] = None
 
 class IssueStatusUpdate(BaseModel):
     status: str
@@ -54,7 +59,7 @@ class Issue(BaseModel):
     severity: str
     image_id: str
     status: str = "pending"
-    report: dict = {"message": "No report generated"}
+    report: Dict = {"message": "No report generated"}
     category: str = "public"
     priority: str = "Medium"
     report_id: str = ""
@@ -64,9 +69,11 @@ class Issue(BaseModel):
     authority_name: Optional[List[str]] = None
     timestamp_formatted: Optional[str] = None
     timezone_name: Optional[str] = None
+    email_status: Optional[str] = None
+    email_errors: Optional[List[str]] = None
 
     class Config:
-        validate_by_name = True
+        validate_assignment = True
         arbitrary_types_allowed = True
 
 def get_logo_base64():
@@ -78,7 +85,7 @@ def get_logo_base64():
         with open(logo_path, "rb") as logo_file:
             return base64.b64encode(logo_file.read()).decode('utf-8')
     except Exception as e:
-        logger.error(f"Failed to load logo: {str(e)}")
+        logger.error(f"Failed to load logo: {str(e)}", exc_info=True)
         return None
 
 def get_department_email_content(department_type: str, issue_data: dict) -> tuple[str, str]:
@@ -233,7 +240,7 @@ def send_authority_email(
     latitude: float,
     longitude: float,
     image_content: bytes
-):
+) -> bool:
     if not authorities:
         logger.warning("No authorities provided, using default")
         authorities = [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
@@ -245,7 +252,6 @@ def send_authority_email(
         embedded_images.append(("momentumai_logo", logo_base64, "image/png"))
     embedded_images.append(("issue_image", issue_image_base64, "image/jpeg"))
 
-    # Define map_link for HTML template
     map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
 
     html_content = f"""
@@ -499,8 +505,21 @@ def send_authority_email(
                 logger.warning(f"Email sending failed for {authority['email']} without raising an exception")
                 errors.append(f"Email sending failed for {authority['email']}")
         except Exception as e:
-            logger.error(f"Failed to send email to {authority['email']}: {str(e)}")
+            logger.error(f"Failed to send email to {authority['email']}: {str(e)}", exc_info=True)
             errors.append(f"Failed to send email to {authority['email']}: {str(e)}")
+    
+    db = get_db()
+    db.issues.update_one(
+        {"_id": issue_data.get("issue_id")},
+        {
+            "$set": {
+                "email_status": "sent" if successful_emails else "failed",
+                "email_errors": errors
+            }
+        }
+    )
+    logger.debug(f"Issue {issue_data.get('issue_id')} updated with email_status: {'sent' if successful_emails else 'failed'}")
+
     if errors:
         logger.warning(f"Email sending issues: {'; '.join(errors)}")
     if successful_emails:
@@ -515,23 +534,34 @@ async def create_issue(
     latitude: float = Form(0.0),
     longitude: float = Form(0.0)
 ):
+    logger.debug(f"Creating issue with description: {description}, address: {address}, lat: {latitude}, lon: {longitude}")
     try:
         db = get_db()
         fs = get_fs()
+        logger.debug("Database and GridFS initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize database: {str(e)}")
+        logger.error(f"Failed to initialize database: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Database initialization failed: {str(e)}")
     
     if not image.content_type.startswith("image/"):
+        logger.error(f"Invalid image format: {image.content_type}")
         raise HTTPException(status_code=400, detail="Invalid image format")
     
-    image_content = await image.read()
+    try:
+        image_content = await image.read()
+        logger.debug(f"Image read successfully, size: {len(image_content)} bytes")
+    except Exception as e:
+        logger.error(f"Failed to read image: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to read image: {str(e)}")
+    
     try:
         issue_type, severity, confidence, category, priority = classify_issue(image_content, description)
         if not issue_type:
+            logger.error("Failed to classify issue type")
             raise ValueError("Failed to classify issue type")
+        logger.debug(f"Issue classified: type={issue_type}, severity={severity}, confidence={confidence}, category={category}, priority={priority}")
     except Exception as e:
-        logger.error(f"Failed to classify issue: {str(e)}")
+        logger.error(f"Failed to classify issue: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to classify issue: {str(e)}")
     
     final_address = address
@@ -541,21 +571,42 @@ async def create_issue(
             geocode_result = await reverse_geocode(latitude, longitude)
             final_address = geocode_result.get("address", "Unknown Address")
             zip_code = geocode_result.get("zip_code", "")
+            logger.debug(f"Geocoded address: {final_address}, zip: {zip_code}")
         except Exception as e:
-            logger.error(f"Failed to geocode coordinates: {str(e)}")
+            logger.warning(f"Failed to geocode coordinates ({latitude}, {longitude}): {str(e)}", exc_info=True)
             final_address = "Unknown Address"
     
     issue_id = str(uuid.uuid4())
     try:
-        report = generate_report(image_content, description, issue_type, severity, final_address, latitude, longitude, issue_id, confidence, category, priority)
+        report = generate_report(
+            image_content=image_content,
+            description=description,
+            issue_type=issue_type,
+            severity=severity,
+            address=final_address,
+            latitude=latitude,
+            longitude=longitude,
+            issue_id=issue_id,
+            confidence=confidence,
+            category=category,
+            priority=priority
+        )
         report["template_fields"].pop("tracking_link", None)
+        logger.debug(f"Report generated for issue {issue_id}")
     except Exception as e:
-        logger.error(f"Failed to generate report for issue {issue_id}: {str(e)}")
+        logger.error(f"Failed to generate report for issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate report: {str(e)}")
     
-    authorities = get_authority(final_address, issue_type, latitude, longitude, category)
-    authority_emails = [auth["email"] for auth in authorities] or ["snapfix@momntumai.com"]
-    authority_names = [auth["name"] for auth in authorities] or ["City Department"]
+    try:
+        authorities = get_authority(final_address, issue_type, latitude, longitude, category) or [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
+        authority_emails = [auth["email"] for auth in authorities]
+        authority_names = [auth["name"] for auth in authorities]
+        logger.debug(f"Authorities fetched: {authority_emails}")
+    except Exception as e:
+        logger.warning(f"Failed to fetch authorities: {str(e)}. Using default authority.", exc_info=True)
+        authorities = [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
+        authority_emails = ["snapfix@momntum-ai.com"]
+        authority_names = ["City Department"]
     
     timezone_name = get_timezone_name(latitude, longitude) or "UTC"
     timestamp = datetime.utcnow().isoformat()
@@ -581,8 +632,9 @@ async def create_issue(
             timestamp_formatted=timestamp_formatted,
             timezone_name=timezone_name
         )
+        logger.info(f"Issue {issue_id} stored successfully with image_id {image_id}")
     except Exception as e:
-        logger.error(f"Failed to store issue {issue_id}: {str(e)}")
+        logger.error(f"Failed to store issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to store issue: {str(e)}")
     
     return IssueResponse(
@@ -605,123 +657,9 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
     try:
         db = get_db()
         fs = get_fs()
-    except Exception as e:
-        logger.error(f"Failed to initialize database for issue {issue_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Database initialization failed: {str(e)}")
-    
-    # Fetch issue from MongoDB
-    try:
-        issue = db.issues.find_one({"_id": issue_id})
-        if not issue:
-            logger.error(f"Issue {issue_id} not found in database")
-            raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
-        if issue.get("status") != "pending":
-            logger.warning(f"Issue {issue_id} already processed with status {issue.get('status')}")
-            raise HTTPException(status_code=400, detail="Issue already processed")
-    except Exception as e:
-        logger.error(f"Failed to fetch issue {issue_id} from database: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch issue: {str(e)}")
-    
-    # Validate required fields
-    required_fields = ["issue_type", "description", "address", "image_id", "report"]
-    missing_fields = [field for field in required_fields if field not in issue or issue[field] is None]
-    if missing_fields:
-        logger.error(f"Issue {issue_id} missing required fields: {missing_fields}")
-        raise HTTPException(status_code=400, detail=f"Issue missing required fields: {missing_fields}")
-    
-    # Use edited report if provided, else use original
-    report = request.edited_report if request.edited_report else issue["report"]
-    if request.edited_report:
-        try:
-            EditedReport(**request.edited_report)  # Validate edited report
-            report["template_fields"] = report.get("template_fields", issue["report"]["template_fields"])
-            report["issue_overview"] = report.get("issue_overview", issue["report"]["issue_overview"])
-            report["recommended_actions"] = report.get("recommended_actions", issue["report"]["recommended_actions"])
-            report["detailed_analysis"] = report.get("detailed_analysis", issue["report"]["detailed_analysis"])
-            report["responsible_authorities_or_parties"] = report.get("responsible_authorities_or_parties", issue["report"]["responsible_authorities_or_parties"])
-            report["template_fields"].pop("tracking_link", None)
-        except Exception as e:
-            logger.error(f"Invalid edited report for issue {issue_id}: {str(e)}")
-            raise HTTPException(status_code=400, detail=f"Invalid edited report: {str(e)}")
-    else:
-        report["template_fields"].pop("tracking_link", None)
-    
-    # Fetch image from GridFS
-    try:
-        image_content = fs.get(ObjectId(issue["image_id"])).read()
-    except gridfs.errors.NoFile:
-        logger.error(f"Image not found for image_id {issue['image_id']} in issue {issue_id}")
-        raise HTTPException(status_code=404, detail=f"Image not found for issue {issue_id}")
-    except Exception as e:
-        logger.error(f"Failed to fetch image for issue {issue_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch image: {str(e)}")
-    
-    # Fetch authorities
-    try:
-        authorities = get_authority(
-            issue.get("address", "Unknown Address"),
-            issue.get("issue_type", "Unknown Issue"),
-            issue.get("latitude", 0.0),
-            issue.get("longitude", 0.0),
-            issue.get("category", "Public")
-        ) or [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
-        logger.debug(f"Authorities for issue {issue_id}: {authorities}")
-    except Exception as e:
-        logger.error(f"Failed to fetch authorities for issue {issue_id}: {str(e)}")
-        authorities = [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
-    
-    # Send emails
-    email_success = False
-    try:
-        email_success = send_authority_email(
-            authorities=authorities,
-            issue_type=issue.get("issue_type", "Unknown Issue"),
-            final_address=issue.get("address", "Unknown Address"),
-            timestamp_formatted=issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
-            report=report,
-            description=issue.get("description", "No description provided"),
-            confidence=issue.get("report", {}).get("issue_overview", {}).get("confidence", 0.0),
-            category=issue.get("category", "Public"),
-            timezone_name=issue.get("timezone_name", "UTC"),
-            latitude=issue.get("latitude", 0.0),
-            longitude=issue.get("longitude", 0.0),
-            image_content=image_content
-        )
-    except Exception as e:
-        logger.error(f"Failed to send authority emails for issue {issue_id}: {str(e)}")
-        # Continue processing even if emails fail
-    
-    # Update issue status
-    try:
-        update_issue_status(issue_id, "accepted")
-        db.issues.update_one({"_id": issue_id}, {"$set": {"report": report}})
-    except Exception as e:
-        logger.error(f"Failed to update issue {issue_id} status: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to update issue status: {str(e)}")
-
-    logger.info(f"Issue {issue_id} accepted and reported to authorities: {[auth['email'] for auth in authorities]}. Email success: {email_success}")
-    return IssueResponse(
-        id=issue_id,
-        message=f"Thank you for using SnapFix! Issue accepted and {'emails sent successfully' if email_success else 'email sending failed'}",
-        report={
-            "issue_id": issue_id,
-            "report": report,
-            "authority_email": [auth["email"] for auth in authorities],
-            "authority_name": [auth["name"] for auth in authorities],
-            "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
-            "timezone_name": issue.get("timezone_name", "UTC")
-        }
-    )
-
-@router.post("/issues/{issue_id}/accept", response_model=IssueResponse)
-async def accept_issue(issue_id: str, request: AcceptRequest):
-    logger.debug(f"Processing accept request for issue {issue_id}")
-    try:
-        db = get_db()
-        fs = get_fs()
         logger.debug("Database and GridFS initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize database for issue {issue_id}: {str(e)}")
+        logger.error(f"Failed to initialize database for issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Database initialization failed: {str(e)}")
     
     # Fetch issue from MongoDB
@@ -734,7 +672,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
             logger.warning(f"Issue {issue_id} already processed with status {issue.get('status')}")
             raise HTTPException(status_code=400, detail="Issue already processed")
     except Exception as e:
-        logger.error(f"Failed to fetch issue {issue_id} from database: {str(e)}")
+        logger.error(f"Failed to fetch issue {issue_id} from database: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch issue: {str(e)}")
     
     # Validate required fields
@@ -748,7 +686,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
     report = request.edited_report if request.edited_report else issue["report"]
     if request.edited_report:
         try:
-            EditedReport(**request.edited_report)  # Validate edited report
+            EditedReport(**request.edited_report)
             report["template_fields"] = report.get("template_fields", issue["report"]["template_fields"])
             report["issue_overview"] = report.get("issue_overview", issue["report"]["issue_overview"])
             report["recommended_actions"] = report.get("recommended_actions", issue["report"]["recommended_actions"])
@@ -756,7 +694,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
             report["responsible_authorities_or_parties"] = report.get("responsible_authorities_or_parties", issue["report"]["responsible_authorities_or_parties"])
             report["template_fields"].pop("tracking_link", None)
         except Exception as e:
-            logger.error(f"Invalid edited report for issue {issue_id}: {str(e)}")
+            logger.error(f"Invalid edited report for issue {issue_id}: {str(e)}", exc_info=True)
             raise HTTPException(status_code=400, detail=f"Invalid edited report: {str(e)}")
     else:
         report["template_fields"].pop("tracking_link", None)
@@ -769,7 +707,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         logger.error(f"Image not found for image_id {issue['image_id']} in issue {issue_id}")
         raise HTTPException(status_code=404, detail=f"Image not found for issue {issue_id}")
     except Exception as e:
-        logger.error(f"Failed to fetch image for issue {issue_id}: {str(e)}")
+        logger.error(f"Failed to fetch image for issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch image: {str(e)}")
     
     # Fetch authorities
@@ -783,7 +721,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         ) or [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
         logger.debug(f"Authorities for issue {issue_id}: {authorities}")
     except Exception as e:
-        logger.warning(f"Failed to fetch authorities for issue {issue_id}: {str(e)}. Using default authority.")
+        logger.warning(f"Failed to fetch authorities for issue {issue_id}: {str(e)}. Using default authority.", exc_info=True)
         authorities = [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
     
     # Send emails
@@ -805,10 +743,10 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
             image_content=image_content
         )
         if not email_success:
-            email_errors = db.issues.find_one({"_id": issue_id}).get("email_errors", [])
+            email_errors = [f"Email sending failed for {auth['email']}" for auth in authorities]
             logger.warning(f"Email sending failed for issue {issue_id}: {email_errors}")
     except Exception as e:
-        logger.error(f"Failed to send authority emails for issue {issue_id}: {str(e)}")
+        logger.error(f"Failed to send authority emails for issue {issue_id}: {str(e)}", exc_info=True)
         email_errors = [str(e)]
     
     # Update issue status and email status
@@ -826,7 +764,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         )
         logger.debug(f"Issue {issue_id} updated with email_status: {'sent' if email_success else 'failed'}")
     except Exception as e:
-        logger.error(f"Failed to update issue {issue_id} status: {str(e)}")
+        logger.error(f"Failed to update issue {issue_id} status: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update issue status: {str(e)}")
 
     logger.info(f"Issue {issue_id} accepted and reported to authorities: {[auth['email'] for auth in authorities]}. Email success: {email_success}")
@@ -842,6 +780,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
             "timezone_name": issue.get("timezone_name", "UTC")
         }
     )
+
 @router.get("/issues", response_model=List[Issue])
 async def list_issues():
     try:
@@ -850,25 +789,21 @@ async def list_issues():
         formatted_issues = []
         for issue in issues:
             try:
-                # Handle timestamp format
                 if isinstance(issue.get('timestamp'), dict):
                     issue['timestamp'] = issue['timestamp'].isoformat()
                 
-                # Clean authority_email and authority_name
-                authority_email = issue.get("authority_email", ["snapfix@momntumai.com"])
+                authority_email = issue.get("authority_email", ["snapfix@momntum-ai.com"])
                 if isinstance(authority_email, list):
-                    # Filter out None and non-string values
                     authority_email = [str(email) for email in authority_email if email is not None and isinstance(email, str)]
-                    if not authority_email:  # If list is empty after filtering
-                        authority_email = ["snapfix@momntumai.com"]
+                    if not authority_email:
+                        authority_email = ["snapfix@momntum-ai.com"]
                 else:
-                    authority_email = [str(authority_email)] if authority_email else ["snapfix@momntumai.com"]
+                    authority_email = [str(authority_email)] if authority_email else ["snapfix@momntum-ai.com"]
 
                 authority_name = issue.get("authority_name", ["City Department"])
                 if isinstance(authority_name, list):
-                    # Filter out None and non-string values
                     authority_name = [str(name) for name in authority_name if name is not None and isinstance(name, str)]
-                    if not authority_name:  # If list is empty after filtering
+                    if not authority_name:
                         authority_name = ["City Department"]
                 else:
                     authority_name = [str(authority_name)] if authority_name else ["City Department"]
@@ -878,12 +813,12 @@ async def list_issues():
                 
                 formatted_issues.append(Issue(**issue))
             except Exception as e:
-                logger.warning(f"Skipping invalid issue {issue.get('_id')}: {str(e)}")
+                logger.warning(f"Skipping invalid issue {issue.get('_id')}: {str(e)}", exc_info=True)
                 continue
         logger.info(f"Retrieved {len(formatted_issues)} valid issues")
         return formatted_issues
     except Exception as e:
-        logger.error(f"Failed to list issues: {str(e)}")
+        logger.error(f"Failed to list issues: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list issues: {str(e)}")
 
 @router.put("/issues/{issue_id}/status")
@@ -897,7 +832,7 @@ async def update_status(issue_id: str, status_update: IssueStatusUpdate):
         logger.info(f"Status updated for issue {issue_id} to {status_update.status}")
         return {"message": "Status updated successfully"}
     except Exception as e:
-        logger.error(f"Failed to update status for issue {issue_id}: {str(e)}")
+        logger.error(f"Failed to update status for issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update status: {str(e)}")
 
 @router.get("/issues/{issue_id}/image")
@@ -921,10 +856,10 @@ async def get_issue_image(issue_id: str):
             logger.error(f"Image {image_id} not found in GridFS for issue {issue_id}")
             raise HTTPException(status_code=404, detail=f"Image {image_id} not found")
         except Exception as e:
-            logger.error(f"Failed to retrieve image {image_id} for issue {issue_id}: {str(e)}")
+            logger.error(f"Failed to retrieve image {image_id} for issue {issue_id}: {str(e)}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Failed to retrieve image: {str(e)}")
     except Exception as e:
-        logger.error(f"Failed to process image request for issue {issue_id}: {str(e)}")
+        logger.error(f"Failed to process image request for issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to process image request: {str(e)}")
 
 @router.get("/health")
@@ -935,5 +870,5 @@ async def health_check():
         logger.debug("Health check passed: database connected")
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
+        logger.error(f"Health check failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=503, detail=f"Database unavailable: {str(e)}")
