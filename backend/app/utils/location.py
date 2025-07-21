@@ -58,7 +58,7 @@ def get_authority(address: str, issue_type: str, latitude: float, longitude: flo
                 {"name": "Sanitation Department", "email": "chrishabh1000@gmail.com", "type": "sanitation"}
             ],
             "stray_animals": [
-                {"name": "Animal Control", "email": "chrishabh1000@gmail.com", "type": "animal_control"}
+                {"name": "Animal Control", "email": "joel@momntumai.com", "type": "animal_control"}
             ],
             "noise_pollution": [
                 {"name": "Environmental Department", "email": "chrishabh1000@gmail.com", "type": "environmental"}
