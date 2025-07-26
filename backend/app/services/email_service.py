@@ -26,10 +26,10 @@ def send_email(
     Args:
         to_email: Recipient email address.
         subject: Email subject.
-        html_content: HTML content of the email.
-        text_content: Plain text content of the email.
+        html_content: HTML content of the email, may include zip code.
+        text_content: Plain text content of the email, may include zip code.
         attachments: List of file paths for attachments.
-        embedded_images: List of tuples (cid, base64_data, mime_type) for embedded images.
+        embedded_images: List of tuples (cid, base64_data, mime_type) for embedded images (e.g., issue image, logo).
 
     Returns:
         bool: True if email was sent successfully, False otherwise.
@@ -40,7 +40,7 @@ def send_email(
     """
     email_host = os.getenv("EMAIL_HOST", "smtp.gmail.com")
     email_port = os.getenv("EMAIL_PORT", "587")
-    email_user = os.getenv("EMAIL_USER", "snapfix@momntum-ai.com")
+    email_user = os.getenv("EMAIL_USER", "snapfix@momntumai.com")
     email_password = os.getenv("EMAIL_PASSWORD")
 
     if not all([email_host, email_port, email_user, email_password]):
@@ -50,15 +50,26 @@ def send_email(
         logger.warning("Skipping email sending due to missing configuration")
         return False
 
+    # Log presence of zip code in content for debugging
+    has_zip_code = "Zip Code" in text_content or "Zip Code" in html_content
+    logger.debug(f"Preparing email to {to_email} with subject '{subject}'. Zip code included: {has_zip_code}")
+
     msg = MIMEMultipart("related")
     msg["From"] = email_user
     msg["To"] = to_email
     msg["Subject"] = subject
 
     alt = MIMEMultipart("alternative")
-    alt.attach(MIMEText(text_content, "plain"))
-    alt.attach(MIMEText(html_content, "html"))
-    msg.attach(alt)
+    try:
+        alt.attach(MIMEText(text_content, "plain"))
+        alt.attach(MIMEText(html_content, "html"))
+        msg.attach(alt)
+        logger.debug("Attached plain text and HTML content to email")
+    except Exception as e:
+        logger.error(f"Failed to attach email content: {str(e)}")
+        if os.getenv("ENV") == "production":
+            raise HTTPException(status_code=500, detail=f"Failed to attach email content: {str(e)}")
+        return False
 
     if embedded_images:
         for cid, base64_data, mime_type in embedded_images:
@@ -70,6 +81,8 @@ def send_email(
                 logger.debug(f"Embedded image {cid} added to email")
             except Exception as e:
                 logger.error(f"Failed to embed image {cid}: {str(e)}")
+                if os.getenv("ENV") == "production":
+                    raise HTTPException(status_code=500, detail=f"Failed to embed image {cid}: {str(e)}")
                 continue
 
     if attachments:
@@ -82,6 +95,8 @@ def send_email(
                     logger.debug(f"Attached file {file_path} to email")
             except Exception as e:
                 logger.error(f"Failed to attach file {file_path}: {str(e)}")
+                if os.getenv("ENV") == "production":
+                    raise HTTPException(status_code=500, detail=f"Failed to attach file {file_path}: {str(e)}")
                 continue
 
     try:

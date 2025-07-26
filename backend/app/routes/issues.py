@@ -3,10 +3,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from services.ai_service import classify_issue, generate_report
 from services.email_service import send_email
-from services.mongodb_service import store_issue, get_issues, update_issue_status, update_pending_issue, get_db, get_fs
-from services.geocode_service import reverse_geocode
-from utils.location import get_authority
-from utils.timezone_utils import get_timezone_name
+from services.mongodb_service import store_issue, get_issues, update_issue_status, get_db, get_fs
+from services.geocode_service import reverse_geocode, geocode_zip_code
+from utils.location import get_authority, get_authority_by_zip_code
+from utils.timezone import get_timezone_name
 from bson.objectid import ObjectId
 import uuid
 import logging
@@ -53,6 +53,7 @@ class Issue(BaseModel):
     id: str = Field(..., alias="_id")
     description: str
     address: str
+    zip_code: Optional[str] = None
     latitude: float = 0.0
     longitude: float = 0.0
     issue_type: str
@@ -65,6 +66,8 @@ class Issue(BaseModel):
     report_id: str = ""
     timestamp: str
     decline_reason: Optional[str] = None
+    decline_history: Optional[List[Dict[str, str]]] = None
+    user_email: Optional[str] = None
     authority_email: Optional[List[str]] = None
     authority_name: Optional[List[str]] = None
     timestamp_formatted: Optional[str] = None
@@ -88,9 +91,10 @@ def get_logo_base64():
         logger.error(f"Failed to load logo: {str(e)}", exc_info=True)
         return None
 
-def get_department_email_content(department_type: str, issue_data: dict) -> tuple[str, str]:
+def get_department_email_content(department_type: str, issue_data: dict, is_user_review: bool = False) -> tuple[str, str]:
     issue_type = issue_data.get("issue_type", "Unknown Issue")
     final_address = issue_data.get("address", "Unknown Address")
+    zip_code = issue_data.get("zip_code", "Unknown Zip Code")
     timestamp_formatted = issue_data.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M"))
     report = issue_data.get("report", {"message": "No report generated"})
     authority_name = issue_data.get("authority_name", "Department")
@@ -100,6 +104,7 @@ def get_department_email_content(department_type: str, issue_data: dict) -> tupl
     timezone_name = issue_data.get("timezone_name", "UTC")
     latitude = issue_data.get("latitude", 0.0)
     longitude = issue_data.get("longitude", 0.0)
+    decline_reason = issue_data.get("decline_reason", "No decline reason provided")
 
     severity_checkboxes = {
         "High": "□ High  ☑ Medium  □ Low" if report.get("issue_overview", {}).get("severity", "").lower() == "medium" else "☑ High  □ Medium  □ Low" if report.get("issue_overview", {}).get("severity", "").lower() == "high" else "□ High  □ Medium  ☑ Low",
@@ -109,20 +114,50 @@ def get_department_email_content(department_type: str, issue_data: dict) -> tupl
 
     map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
 
-    templates = {
-        "fire": {
-            "subject": f"Urgent Fire Hazard Alert – {issue_type.title()} at {final_address}",
-            "text_content": f"""
+    if is_user_review:
+        subject = f"Updated Report for {issue_type.title()} at {final_address} - Review Required"
+        text_content = f"""
+Subject: {issue_type.title()} – {final_address} – {timestamp_formatted} – ID {report.get('template_fields', {}).get('oid', 'N/A')}
+
+Dear User,
+
+The report for the {issue_type.title()} issue at {final_address} (Zip: {zip_code}) has been updated based on your feedback: {decline_reason}
+
+Please review the updated report below:
+• Issue Type: {category.title()} – {issue_type.title()}
+• Time Reported: {timestamp_formatted} {timezone_name}
+• Location: {final_address}
+• Zip Code: {zip_code}
+• GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}
+• Live Location: {map_link}
+• Severity: {severity_checkboxes}
+• Decline Reason: {decline_reason}
+• Report ID: {report.get('template_fields', {}).get('oid', 'N/A')}
+
+Photo Evidence:
+• File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
+• AI Detection: "{report.get('template_fields', {}).get('ai_tag', 'N/A')}" - Confidence: {confidence}%
+
+Please accept the report or provide further feedback by declining with a reason. Reply to this email or contact snapfix@momntumai.com.
+
+Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
+"""
+    else:
+        templates = {
+            "fire": {
+                "subject": f"Urgent Fire Hazard Alert – {issue_type.title()} at {final_address}",
+                "text_content": f"""
 Subject: {issue_type.title()} – {final_address} – {timestamp_formatted} – ID {report.get('template_fields', {}).get('oid', 'N/A')}
 
 Dear {authority_name.title()} Team,
 
-A critical {issue_type.title()} issue has been reported at {final_address}: {description}
+A critical {issue_type.title()} issue has been reported at {final_address} (Zip: {zip_code}): {description}
 
 Fire Department Action Required:
 • Issue Type: {category.title()} – {issue_type.title()}
 • Time Reported: {timestamp_formatted} {timezone_name}
 • Location: {final_address}
+• Zip Code: {zip_code}
 • GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}
 • Live Location: {map_link}
 • Severity: {severity_checkboxes}
@@ -133,24 +168,25 @@ Photo Evidence:
 • File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
 • AI Detection: "{report.get('template_fields', {}).get('ai_tag', 'N/A')}" - Confidence: {confidence}%
 
-Please respond urgently. Contact snapfix@momntumai.com for further details.
+Contact snapfix@momntumai.com for further details.
 
 Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
 """
-        },
-        "police": {
-            "subject": f"Public Safety Alert – {issue_type.title()} at {final_address}",
-            "text_content": f"""
+            },
+            "police": {
+                "subject": f"Public Safety Alert – {issue_type.title()} at {final_address}",
+                "text_content": f"""
 Subject: {issue_type.title()} – {final_address} – {timestamp_formatted} – ID {report.get('template_fields', {}).get('oid', 'N/A')}
 
 Dear {authority_name.title()} Team,
 
-A public safety issue ({issue_type.title()}) has been reported at {final_address}: {description}
+A public safety issue ({issue_type.title()}) has been reported at {final_address} (Zip: {zip_code}): {description}
 
 Police Action Required:
 • Issue Type: {category.title()} – {issue_type.title()}
 • Time Reported: {timestamp_formatted} {timezone_name}
 • Location: {final_address}
+• Zip Code: {zip_code}
 • GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}
 • Live Location: {map_link}
 • Severity: {severity_checkboxes}
@@ -161,24 +197,25 @@ Photo Evidence:
 • File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
 • AI Detection: "{report.get('template_fields', {}).get('ai_tag', 'N/A')}" - Confidence: {confidence}%
 
-Please respond promptly. Contact snapfix@momntumai.com for further details.
+Contact snapfix@momntumai.com for further details.
 
 Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
 """
-        },
-        "public_works": {
-            "subject": f"Infrastructure Issue – {issue_type.title()} at {final_address}",
-            "text_content": f"""
+            },
+            "public_works": {
+                "subject": f"Infrastructure Issue – {issue_type.title()} at {final_address}",
+                "text_content": f"""
 Subject: {issue_type.title()} – {final_address} – {timestamp_formatted} – ID {report.get('template_fields', {}).get('oid', 'N/A')}
 
 Dear {authority_name.title()} Team,
 
-An infrastructure issue ({issue_type.title()}) has been reported at {final_address}: {description}
+An infrastructure issue ({issue_type.title()}) has been reported at {final_address} (Zip: {zip_code}): {description}
 
 Public Works Action Required:
 • Issue Type: {category.title()} – {issue_type.title()}
 • Time Reported: {timestamp_formatted} {timezone_name}
 • Location: {final_address}
+• Zip Code: {zip_code}
 • GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}
 • Live Location: {map_link}
 • Severity: {severity_checkboxes}
@@ -189,24 +226,25 @@ Photo Evidence:
 • File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
 • AI Detection: "{report.get('template_fields', {}).get('ai_tag', 'N/A')}" - Confidence: {confidence}%
 
-Please address this issue. Contact snapfix@momntumai.com for further details.
+Contact snapfix@momntumai.com for further details.
 
 Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
 """
-        },
-        "general": {
-            "subject": f"General Issue – {issue_type.title()} at {final_address}",
-            "text_content": f"""
+            },
+            "general": {
+                "subject": f"General Issue – {issue_type.title()} at {final_address}",
+                "text_content": f"""
 Subject: {issue_type.title()} – {final_address} – {timestamp_formatted} – ID {report.get('template_fields', {}).get('oid', 'N/A')}
 
 Dear {authority_name.title()} Team,
 
-An issue ({issue_type.title()}) has been reported at {final_address}: {description}
+An issue ({issue_type.title()}) has been reported at {final_address} (Zip: {zip_code}): {description}
 
 Action Required:
 • Issue Type: {category.title()} – {issue_type.title()}
 • Time Reported: {timestamp_formatted} {timezone_name}
 • Location: {final_address}
+• Zip Code: {zip_code}
 • GPS: {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}
 • Live Location: {map_link}
 • Severity: {severity_checkboxes}
@@ -217,20 +255,20 @@ Photo Evidence:
 • File: {report.get('template_fields', {}).get('image_filename', 'N/A')}
 • AI Detection: "{report.get('template_fields', {}).get('ai_tag', 'N/A')}" - Confidence: {confidence}%
 
-Please respond to snapfix@momntumai.com with any feedback.
+Contact snapfix@momntumai.com for further details.
 
 Disclaimer: This AI-generated report may contain inaccuracies. Refer to the attached image for primary evidence.
 """
+            }
         }
-    }
-
-    template = templates.get(department_type, templates["general"])
-    return template["subject"], template["text_content"]
+        template = templates.get(department_type, templates["general"])
+        return template["subject"], template["text_content"]
 
 def send_authority_email(
     authorities: List[Dict[str, str]],
     issue_type: str,
     final_address: str,
+    zip_code: str,
     timestamp_formatted: str,
     report: dict,
     description: str,
@@ -239,7 +277,9 @@ def send_authority_email(
     timezone_name: str,
     latitude: float,
     longitude: float,
-    image_content: bytes
+    image_content: bytes,
+    decline_reason: Optional[str] = None,
+    is_user_review: bool = False
 ) -> bool:
     if not authorities:
         logger.warning("No authorities provided, using default")
@@ -378,7 +418,7 @@ def send_authority_email(
 <body>
     <div class="container">
         <div class="banner">
-            🚨 New Infrastructure Issue Detected 🚨
+            🚨 {'Updated Report for Review' if is_user_review else 'New Infrastructure Issue Detected'} 🚨
         </div>
         <div class="content">
             <div class="header">
@@ -387,12 +427,13 @@ def send_authority_email(
             </div>
             <div class="section">
                 <div class="section-title">
-                    <span class="emoji">👋</span> Hello Team
+                    <span class="emoji">👋</span> {'Hello User' if is_user_review else 'Hello Team'}
                 </div>
-                <p>Our AI has detected a <strong>{issue_type.title()}</strong> issue that requires your attention:</p>
+                <p>{'Please review the updated report for a' if is_user_review else 'Our AI has detected a'} <strong>{issue_type.title()}</strong> issue{' that requires your attention' if not is_user_review else ''}:</p>
                 <blockquote style="background: #f8f9fa; padding: 10px; border-left: 4px solid #1a2a6c; margin: 15px 0;">
                     "{description.capitalize()}"
                 </blockquote>
+                {'<p><strong>Decline Reason:</strong> ' + decline_reason + '</p>' if decline_reason and is_user_review else ''}
             </div>
             <div class="section">
                 <div class="section-title">
@@ -405,6 +446,7 @@ def send_authority_email(
                     <span class="emoji">📍</span> Location Details
                 </div>
                 <p><strong>Address:</strong> {final_address}</p>
+                <p><strong>Zip Code:</strong> {zip_code}</p>
                 <p><strong>Coordinates:</strong> {latitude if latitude else 'N/A'}, {longitude if longitude else 'N/A'}</p>
                 <p><strong>Map Link:</strong> <a href="{map_link}" target="_blank">{map_link if map_link.startswith('http') else 'No coordinates provided'}</a></p>
             </div>
@@ -449,6 +491,7 @@ def send_authority_email(
                 <p><strong>Potential Impact:</strong> {report.get('detailed_analysis', {}).get('potential_consequences_if_ignored', 'N/A')}</p>
                 <p><strong>Urgency Reason:</strong> {report.get('detailed_analysis', {}).get('public_safety_risk', 'Unknown').title()} risk to public safety</p>
                 <p><strong>Location Context:</strong> {final_address}</p>
+                {'<p><strong>Feedback:</strong> ' + report.get('detailed_analysis', {}).get('feedback', 'None') + '</p>' if is_user_review else ''}
             </div>
             <div class="section">
                 <div class="section-title">
@@ -458,13 +501,13 @@ def send_authority_email(
                 <p><small>File: {report.get('template_fields', {}).get('image_filename', 'N/A')}</small></p>
             </div>
             <div style="background: #f5f7fa; padding: 15px; border-radius: 8px; margin-top: 20px;">
-                <div style="font-weight: bold; margin-bottom: 10px;">📩 Need to respond?</div>
-                <p>Reply to this email or forward to <a href="mailto:snapfix@momntumai.com">snapfix@momntumai.com</a> with your comments.</p>
+                <div style="font-weight: bold; margin-bottom: 10px;">📩 {'Action Required' if is_user_review else 'Need to respond?'}</div>
+                <p>{'Please review the updated report and either accept it or provide further feedback by declining with a reason.' if is_user_review else 'Please take appropriate action and contact us if needed.'} Reply to this email or forward to <a href="mailto:snapfix@momntumai.com">snapfix@momntumai.com</a> with your comments.</p>
             </div>
         </div>
         <div class="footer">
-            <p>This report was submitted via SnapFix AI by MomentumAI</p>
-            <p>© {report.get('template_fields', {}).get('timestamp', datetime.utcnow().strftime('%Y-%m-%d')).split('-')[0]} MomentumAI | All Rights Reserved</p>
+            <p>This report was submitted via SnapFix AI by MomntumAI</p>
+            <p>© {report.get('template_fields', {}).get('timestamp', datetime.utcnow().strftime('%Y-%m-%d')).split('-')[0]} MomntumAI | All Rights Reserved</p>
             <p style="font-size: 10px; color: #aaa;">This is an automated message. Please do not reply directly to this email.</p>
         </div>
     </div>
@@ -476,19 +519,25 @@ def send_authority_email(
     successful_emails = []
     for authority in authorities:
         try:
-            subject, text_content = get_department_email_content(authority["type"], {
-                "issue_type": issue_type,
-                "address": final_address,
-                "timestamp_formatted": timestamp_formatted,
-                "report": report,
-                "authority_name": authority["name"],
-                "description": description,
-                "confidence": confidence,
-                "category": category,
-                "timezone_name": timezone_name,
-                "latitude": latitude,
-                "longitude": longitude
-            })
+            subject, text_content = get_department_email_content(
+                authority["type"],
+                {
+                    "issue_type": issue_type,
+                    "address": final_address,
+                    "zip_code": zip_code,
+                    "timestamp_formatted": timestamp_formatted,
+                    "report": report,
+                    "authority_name": authority["name"],
+                    "description": description,
+                    "confidence": confidence,
+                    "category": category,
+                    "timezone_name": timezone_name,
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "decline_reason": decline_reason
+                },
+                is_user_review=is_user_review
+            )
             logger.debug(f"Sending email to {authority['email']} for {authority['type']} with subject: {subject}")
             success = send_email(
                 to_email=authority["email"],
@@ -510,7 +559,7 @@ def send_authority_email(
     
     db = get_db()
     db.issues.update_one(
-        {"_id": issue_data.get("issue_id")},
+        {"_id": issue_id},
         {
             "$set": {
                 "email_status": "sent" if successful_emails else "failed",
@@ -518,23 +567,25 @@ def send_authority_email(
             }
         }
     )
-    logger.debug(f"Issue {issue_data.get('issue_id')} updated with email_status: {'sent' if successful_emails else 'failed'}")
+    logger.debug(f"Issue {issue_id} updated with email_status: {'sent' if successful_emails else 'failed'}")
 
     if errors:
         logger.warning(f"Email sending issues: {'; '.join(errors)}")
     if successful_emails:
         logger.info(f"Emails sent successfully to: {', '.join(successful_emails)}")
-    return len(errors) == 0  # Return True if no errors
+    return len(errors) == 0
 
 @router.post("/issues", response_model=IssueResponse)
 async def create_issue(
     image: UploadFile = File(...),
     description: str = Form(...),
     address: str = Form(''),
+    zip_code: Optional[str] = Form(None),
     latitude: float = Form(0.0),
-    longitude: float = Form(0.0)
+    longitude: float = Form(0.0),
+    user_email: Optional[str] = Form(None)
 ):
-    logger.debug(f"Creating issue with description: {description}, address: {address}, lat: {latitude}, lon: {longitude}")
+    logger.debug(f"Creating issue with description: {description}, address: {address}, zip: {zip_code}, lat: {latitude}, lon: {longitude}, user_email: {user_email}")
     try:
         db = get_db()
         fs = get_fs()
@@ -565,12 +616,21 @@ async def create_issue(
         raise HTTPException(status_code=500, detail=f"Failed to classify issue: {str(e)}")
     
     final_address = address
-    zip_code = ""
-    if not address and latitude and longitude:
+    if zip_code:
+        try:
+            geocode_result = await geocode_zip_code(zip_code)
+            final_address = geocode_result.get("address", address or "Unknown Address")
+            latitude = geocode_result.get("latitude", latitude)
+            longitude = geocode_result.get("longitude", longitude)
+            logger.debug(f"Geocoded zip code {zip_code}: address={final_address}, lat={latitude}, lon={longitude}")
+        except Exception as e:
+            logger.warning(f"Failed to geocode zip code {zip_code}: {str(e)}", exc_info=True)
+            final_address = address or "Unknown Address"
+    elif not address and latitude and longitude:
         try:
             geocode_result = await reverse_geocode(latitude, longitude)
             final_address = geocode_result.get("address", "Unknown Address")
-            zip_code = geocode_result.get("zip_code", "")
+            zip_code = geocode_result.get("zip_code", zip_code)
             logger.debug(f"Geocoded address: {final_address}, zip: {zip_code}")
         except Exception as e:
             logger.warning(f"Failed to geocode coordinates ({latitude}, {longitude}): {str(e)}", exc_info=True)
@@ -584,6 +644,7 @@ async def create_issue(
             issue_type=issue_type,
             severity=severity,
             address=final_address,
+            zip_code=zip_code,
             latitude=latitude,
             longitude=longitude,
             issue_id=issue_id,
@@ -592,20 +653,26 @@ async def create_issue(
             priority=priority
         )
         report["template_fields"].pop("tracking_link", None)
+        report["template_fields"]["zip_code"] = zip_code or "N/A"
+        report["template_fields"]["address"] = final_address or "Not specified"
         logger.debug(f"Report generated for issue {issue_id}")
     except Exception as e:
         logger.error(f"Failed to generate report for issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate report: {str(e)}")
     
     try:
-        authorities = get_authority(final_address, issue_type, latitude, longitude, category) or [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
+        authorities = []
+        if zip_code:
+            authorities = get_authority_by_zip_code(zip_code, issue_type, category) or [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
+        else:
+            authorities = get_authority(final_address, issue_type, latitude, longitude, category) or [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
         authority_emails = [auth["email"] for auth in authorities]
         authority_names = [auth["name"] for auth in authorities]
         logger.debug(f"Authorities fetched: {authority_emails}")
     except Exception as e:
         logger.warning(f"Failed to fetch authorities: {str(e)}. Using default authority.", exc_info=True)
-        authorities = [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
-        authority_emails = ["snapfix@momntum-ai.com"]
+        authorities = [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
+        authority_emails = ["snapfix@momntumai.com"]
         authority_names = ["City Department"]
     
     timezone_name = get_timezone_name(latitude, longitude) or "UTC"
@@ -618,6 +685,7 @@ async def create_issue(
             image_content=image_content,
             description=description,
             address=final_address,
+            zip_code=zip_code,
             latitude=latitude,
             longitude=longitude,
             issue_type=issue_type,
@@ -630,12 +698,43 @@ async def create_issue(
             authority_email=authority_emails,
             authority_name=authority_names,
             timestamp_formatted=timestamp_formatted,
-            timezone_name=timezone_name
+            timezone_name=timezone_name,
+            user_email=user_email
         )
         logger.info(f"Issue {issue_id} stored successfully with image_id {image_id}")
     except Exception as e:
         logger.error(f"Failed to store issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to store issue: {str(e)}")
+    
+    try:
+        user_authority = [{"name": "User", "email": user_email or "snapfix@momntumai.com", "type": "general"}]
+        email_success = send_authority_email(
+            authorities=user_authority,
+            issue_type=issue_type,
+            final_address=final_address,
+            zip_code=zip_code or "N/A",
+            timestamp_formatted=timestamp_formatted,
+            report=report,
+            description=description,
+            confidence=confidence,
+            category=category,
+            timezone_name=timezone_name,
+            latitude=latitude,
+            longitude=longitude,
+            image_content=image_content,
+            is_user_review=True
+        )
+        db.issues.update_one(
+            {"_id": issue_id},
+            {
+                "$set": {
+                    "email_status": "sent" if email_success else "failed",
+                    "email_errors": [] if email_success else ["Failed to send initial review email"]
+                }
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to send initial review email for issue {issue_id}: {str(e)}", exc_info=True)
     
     return IssueResponse(
         id=issue_id,
@@ -662,7 +761,6 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         logger.error(f"Failed to initialize database for issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Database initialization failed: {str(e)}")
     
-    # Fetch issue from MongoDB
     try:
         issue = db.issues.find_one({"_id": issue_id})
         if not issue:
@@ -675,14 +773,12 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         logger.error(f"Failed to fetch issue {issue_id} from database: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch issue: {str(e)}")
     
-    # Validate required fields
     required_fields = ["issue_type", "description", "address", "image_id", "report"]
     missing_fields = [field for field in required_fields if field not in issue or issue[field] is None]
     if missing_fields:
         logger.error(f"Issue {issue_id} missing required fields: {missing_fields}")
         raise HTTPException(status_code=400, detail=f"Issue missing required fields: {missing_fields}")
     
-    # Use edited report if provided, else use original
     report = request.edited_report if request.edited_report else issue["report"]
     if request.edited_report:
         try:
@@ -693,13 +789,14 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
             report["detailed_analysis"] = report.get("detailed_analysis", issue["report"]["detailed_analysis"])
             report["responsible_authorities_or_parties"] = report.get("responsible_authorities_or_parties", issue["report"]["responsible_authorities_or_parties"])
             report["template_fields"].pop("tracking_link", None)
+            report["template_fields"]["zip_code"] = issue.get("zip_code", "N/A")
         except Exception as e:
             logger.error(f"Invalid edited report for issue {issue_id}: {str(e)}", exc_info=True)
             raise HTTPException(status_code=400, detail=f"Invalid edited report: {str(e)}")
     else:
         report["template_fields"].pop("tracking_link", None)
+        report["template_fields"]["zip_code"] = issue.get("zip_code", "N/A")
     
-    # Fetch image from GridFS
     try:
         image_content = fs.get(ObjectId(issue["image_id"])).read()
         logger.debug(f"Image {issue['image_id']} retrieved for issue {issue_id}")
@@ -710,21 +807,24 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         logger.error(f"Failed to fetch image for issue {issue_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to fetch image: {str(e)}")
     
-    # Fetch authorities
     try:
-        authorities = get_authority(
-            issue.get("address", "Unknown Address"),
-            issue.get("issue_type", "Unknown Issue"),
-            issue.get("latitude", 0.0),
-            issue.get("longitude", 0.0),
-            issue.get("category", "Public")
-        ) or [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
+        authorities = []
+        if issue.get("zip_code"):
+            authorities = get_authority_by_zip_code(issue["zip_code"], issue.get("issue_type", "Unknown Issue"), issue.get("category", "Public"))
+        else:
+            authorities = get_authority(
+                issue.get("address", "Unknown Address"),
+                issue.get("issue_type", "Unknown Issue"),
+                issue.get("latitude", 0.0),
+                issue.get("longitude", 0.0),
+                issue.get("category", "Public")
+            )
+        authorities = authorities or [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
         logger.debug(f"Authorities for issue {issue_id}: {authorities}")
     except Exception as e:
         logger.warning(f"Failed to fetch authorities for issue {issue_id}: {str(e)}. Using default authority.", exc_info=True)
-        authorities = [{"name": "City Department", "email": "snapfix@momntum-ai.com", "type": "general"}]
+        authorities = [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
     
-    # Send emails
     email_success = False
     email_errors = []
     try:
@@ -732,6 +832,7 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
             authorities=authorities,
             issue_type=issue.get("issue_type", "Unknown Issue"),
             final_address=issue.get("address", "Unknown Address"),
+            zip_code=issue.get("zip_code", "N/A"),
             timestamp_formatted=issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
             report=report,
             description=issue.get("description", "No description provided"),
@@ -740,7 +841,8 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
             timezone_name=issue.get("timezone_name", "UTC"),
             latitude=issue.get("latitude", 0.0),
             longitude=issue.get("longitude", 0.0),
-            image_content=image_content
+            image_content=image_content,
+            is_user_review=False
         )
         if not email_success:
             email_errors = [f"Email sending failed for {auth['email']}" for auth in authorities]
@@ -749,7 +851,6 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
         logger.error(f"Failed to send authority emails for issue {issue_id}: {str(e)}", exc_info=True)
         email_errors = [str(e)]
     
-    # Update issue status and email status
     try:
         update_issue_status(issue_id, "accepted")
         db.issues.update_one(
@@ -758,7 +859,10 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
                 "$set": {
                     "report": report,
                     "email_status": "sent" if email_success else "failed",
-                    "email_errors": email_errors
+                    "email_errors": email_errors,
+                    "status": "accepted",
+                    "decline_reason": None,
+                    "decline_history": []
                 }
             }
         )
@@ -777,7 +881,160 @@ async def accept_issue(issue_id: str, request: AcceptRequest):
             "authority_email": [auth["email"] for auth in authorities],
             "authority_name": [auth["name"] for auth in authorities],
             "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+            "zip_code": issue.get("zip_code", "N/A"),
             "timezone_name": issue.get("timezone_name", "UTC")
+        }
+    )
+
+@router.post("/issues/{issue_id}/decline", response_model=IssueResponse)
+async def decline_issue(issue_id: str, request: DeclineRequest):
+    logger.debug(f"Processing decline request for issue {issue_id} with reason: {request.decline_reason}")
+    try:
+        db = get_db()
+        fs = get_fs()
+        logger.debug("Database and GridFS initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize database for issue {issue_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Database initialization failed: {str(e)}")
+
+    try:
+        issue = db.issues.find_one({"_id": issue_id})
+        if not issue:
+            logger.error(f"Issue {issue_id} not found in database")
+            raise HTTPException(status_code=404, detail=f"Issue {issue_id} not found")
+        if issue.get("status") != "pending":
+            logger.warning(f"Issue {issue_id} already processed with status {issue.get('status')}")
+            raise HTTPException(status_code=400, detail="Issue already processed")
+    except Exception as e:
+        logger.error(f"Failed to fetch issue {issue_id} from database: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch issue: {str(e)}")
+
+    required_fields = ["issue_type", "description", "address", "image_id", "report"]
+    missing_fields = [field for field in required_fields if field not in issue or issue[field] is None]
+    if missing_fields:
+        logger.error(f"Issue {issue_id} missing required fields: {missing_fields}")
+        raise HTTPException(status_code=400, detail=f"Issue missing required fields: {missing_fields}")
+
+    if not request.decline_reason or len(request.decline_reason.strip()) < 5:
+        logger.error(f"Invalid decline reason for issue {issue_id}: {request.decline_reason}")
+        raise HTTPException(status_code=400, detail="Decline reason must be at least 5 characters long")
+
+    try:
+        image_content = fs.get(ObjectId(issue["image_id"])).read()
+        logger.debug(f"Image {issue['image_id']} retrieved for issue {issue_id}")
+    except gridfs.errors.NoFile:
+        logger.error(f"Image not found for image_id {issue['image_id']} in issue {issue_id}")
+        raise HTTPException(status_code=404, detail=f"Image not found for issue {issue_id}")
+    except Exception as e:
+        logger.error(f"Failed to fetch image for issue {issue_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch image: {str(e)}")
+
+    report = request.edited_report if request.edited_report else issue["report"]
+    if request.edited_report:
+        try:
+            EditedReport(**request.edited_report)
+            report["template_fields"] = report.get("template_fields", issue["report"]["template_fields"])
+            report["issue_overview"] = report.get("issue_overview", issue["report"]["issue_overview"])
+            report["recommended_actions"] = report.get("recommended_actions", issue["report"]["recommended_actions"])
+            report["detailed_analysis"] = report.get("detailed_analysis", issue["report"]["detailed_analysis"])
+            report["responsible_authorities_or_parties"] = report.get("responsible_authorities_or_parties", issue["report"]["responsible_authorities_or_parties"])
+            report["template_fields"].pop("tracking_link", None)
+            report["template_fields"]["zip_code"] = issue.get("zip_code", "N/A")
+        except Exception as e:
+            logger.error(f"Invalid edited report for issue {issue_id}: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=400, detail=f"Invalid edited report: {str(e)}")
+    else:
+        report["template_fields"].pop("tracking_link", None)
+        report["template_fields"]["zip_code"] = issue.get("zip_code", "N/A")
+
+    try:
+        updated_report = generate_report(
+            image_content=image_content,
+            description=issue.get("description", "No description provided"),
+            issue_type=issue.get("issue_type", "Unknown Issue"),
+            severity=issue.get("severity", "Medium"),
+            address=issue.get("address", "Unknown Address"),
+            zip_code=issue.get("zip_code", "N/A"),
+            latitude=issue.get("latitude", 0.0),
+            longitude=issue.get("longitude", 0.0),
+            issue_id=issue_id,
+            confidence=issue.get("report", {}).get("issue_overview", {}).get("confidence", 0.0),
+            category=issue.get("category", "Public"),
+            priority=issue.get("priority", "Medium"),
+            decline_reason=request.decline_reason
+        )
+        updated_report["template_fields"].pop("tracking_link", None)
+        updated_report["template_fields"]["zip_code"] = issue.get("zip_code", "N/A")
+        logger.debug(f"Updated report generated for issue {issue_id} with decline reason: {request.decline_reason}")
+    except Exception as e:
+        logger.error(f"Failed to generate updated report for issue {issue_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate updated report: {str(e)}")
+
+    email_success = False
+    email_errors = []
+    try:
+        user_authority = [{"name": "User", "email": issue.get("user_email", "snapfix@momntumai.com"), "type": "general"}]
+        email_success = send_authority_email(
+            authorities=user_authority,
+            issue_type=issue.get("issue_type", "Unknown Issue"),
+            final_address=issue.get("address", "Unknown Address"),
+            zip_code=issue.get("zip_code", "N/A"),
+            timestamp_formatted=issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+            report=updated_report,
+            description=issue.get("description", "No description provided"),
+            confidence=issue.get("report", {}).get("issue_overview", {}).get("confidence", 0.0),
+            category=issue.get("category", "Public"),
+            timezone_name=issue.get("timezone_name", "UTC"),
+            latitude=issue.get("latitude", 0.0),
+            longitude=issue.get("longitude", 0.0),
+            image_content=image_content,
+            decline_reason=request.decline_reason,
+            is_user_review=True
+        )
+        if not email_success:
+            email_errors = [f"Email sending failed for {user_authority[0]['email']}"]
+            logger.warning(f"Email sending failed for issue {issue_id}: {email_errors}")
+    except Exception as e:
+        logger.error(f"Failed to send review email for issue {issue_id}: {str(e)}", exc_info=True)
+        email_errors = [str(e)]
+
+    try:
+        decline_history = issue.get("decline_history", []) or []
+        decline_history.append({
+            "reason": request.decline_reason,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        db.issues.update_one(
+            {"_id": issue_id},
+            {
+                "$set": {
+                    "report": updated_report,
+                    "decline_reason": request.decline_reason,
+                    "decline_history": decline_history,
+                    "email_status": "sent" if email_success else "failed",
+                    "email_errors": email_errors,
+                    "status": "pending"
+                }
+            }
+        )
+        logger.debug(f"Issue {issue_id} updated with decline reason: {request.decline_reason}, email_status: {'sent' if email_success else 'failed'}")
+    except Exception as e:
+        logger.error(f"Failed to update issue {issue_id} with decline reason: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to update issue: {str(e)}")
+
+    logger.info(f"Issue {issue_id} declined with reason: {request.decline_reason}. Updated report sent to user for review. Email success: {email_success}")
+    return IssueResponse(
+        id=issue_id,
+        message=f"Issue declined with reason: {request.decline_reason}. Updated report sent for review. {'Emails sent successfully' if email_success else 'Email sending failed: ' + '; '.join(email_errors)}",
+        report={
+            "issue_id": issue_id,
+            "report": updated_report,
+            "authority_email": [issue.get("user_email", "snapfix@momntumai.com")],
+            "authority_name": ["User"],
+            "timestamp_formatted": issue.get("timestamp_formatted", datetime.utcnow().strftime("%Y-%m-%d %H:%M")),
+            "zip_code": issue.get("zip_code", "N/A"),
+            "timezone_name": issue.get("timezone_name", "UTC"),
+            "decline_reason": request.decline_reason
         }
     )
 
@@ -792,13 +1049,13 @@ async def list_issues():
                 if isinstance(issue.get('timestamp'), dict):
                     issue['timestamp'] = issue['timestamp'].isoformat()
                 
-                authority_email = issue.get("authority_email", ["snapfix@momntum-ai.com"])
+                authority_email = issue.get("authority_email", ["snapfix@momntumai.com"])
                 if isinstance(authority_email, list):
                     authority_email = [str(email) for email in authority_email if email is not None and isinstance(email, str)]
                     if not authority_email:
-                        authority_email = ["snapfix@momntum-ai.com"]
+                        authority_email = ["snapfix@momntumai.com"]
                 else:
-                    authority_email = [str(authority_email)] if authority_email else ["snapfix@momntum-ai.com"]
+                    authority_email = [str(authority_email)] if authority_email else ["snapfix@momntumai.com"]
 
                 authority_name = issue.get("authority_name", ["City Department"])
                 if isinstance(authority_name, list):

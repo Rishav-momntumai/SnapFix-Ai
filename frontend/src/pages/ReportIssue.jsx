@@ -23,7 +23,6 @@ const StatusMessage = ({ status }) => {
       setIsVisible(true);
       controls.start('animate');
       
-      // Auto-dismiss after 5 seconds unless it's a loading message
       if (!status.includes('Loading')) {
         const timer = setTimeout(() => {
           controls.start('exit').then(() => setIsVisible(false));
@@ -92,7 +91,7 @@ const StatusMessage = ({ status }) => {
           <span className="fs-4 me-2">{getStatusEmoji()}</span>
           <div className="d-flex align-items-center">
             {getStatusIcon()}
-            {status}
+            <span style={{ color: 'black' }}>{status}</span>
           </div>
         </motion.div>
       )}
@@ -115,25 +114,29 @@ const IssueCard = ({ issue, index, expanded, toggleExpand }) => {
     }
   };
 
+  // Ensure issue.id exists, fallback to index if not available
+  const uniqueKey = issue.id || `issue-${index}`;
+
   return (
     <motion.div
+      key={uniqueKey} // Ensure unique key
       variants={cardVariants}
       initial="hidden"
       animate="visible"
       className={`list-group-item list-group-item-action rounded-3 mb-2 overflow-hidden ${expanded ? 'active' : ''}`}
-      style={{ cursor: 'pointer' }}
+      style={{ cursor: 'pointer', backgroundColor: '#fff', color: '#000' }}
       onClick={toggleExpand}
       whileHover={{ scale: 1.01 }}
       whileTap={{ scale: 0.99 }}
     >
       <div className="d-flex w-100 justify-content-between align-items-center">
         <div className="d-flex align-items-center">
-          <div className={`me-3 p-2 rounded-circle ${expanded ? 'bg-white text-primary' : 'bg-primary text-white'}`}>
+          <div className={`me-3 p-2 rounded-circle ${expanded ? 'bg-white text-black' : 'bg-black text-white'}`}>
             {index + 1}
           </div>
-          <h5 className="mb-0">{issue.title}</h5>
+          <h5 className="mb-0" style={{ color: '#000' }}>{issue.title}</h5>
         </div>
-        {expanded ? <FiChevronUp /> : <FiChevronDown />}
+        {expanded ? <FiChevronUp style={{ color: '#000' }} /> : <FiChevronDown style={{ color: '#000' }} />}
       </div>
       
       <AnimatePresence>
@@ -146,16 +149,16 @@ const IssueCard = ({ issue, index, expanded, toggleExpand }) => {
             className="mt-3"
           >
             <div className="d-flex align-items-center mb-2">
-              <FiMapPin className="me-2" />
-              <small>📍 {issue.location}</small>
+              <FiMapPin className="me-2" style={{ color: '#000' }} />
+              <small style={{ color: '#000' }}>📍 {issue.location}</small>
             </div>
             <div className="d-flex align-items-center mb-2">
-              <FiCalendar className="me-2" />
-              <small>📅 {new Date(issue.date).toLocaleDateString()}</small>
+              <FiCalendar className="me-2" style={{ color: '#000' }} />
+              <small style={{ color: '#000' }}>📅 {new Date(issue.date).toLocaleDateString()}</small>
             </div>
             <div className="d-flex align-items-start">
-              <FiInfo className="me-2 mt-1" />
-              <p className="mb-0">{issue.description}</p>
+              <FiInfo className="me-2 mt-1" style={{ color: '#000' }} />
+              <p className="mb-0" style={{ color: '#000' }}>{issue.description}</p>
             </div>
             {issue.image && (
               <motion.img 
@@ -165,6 +168,7 @@ const IssueCard = ({ issue, index, expanded, toggleExpand }) => {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.2 }}
+                style={{ color: '#000' }}
               />
             )}
           </motion.div>
@@ -193,11 +197,15 @@ function ReportIssue() {
     setIsLoading(true);
     setStatus('🔍 Loading issues... Please wait');
     try {
-      // Simulate network delay for demo purposes
       await new Promise(resolve => setTimeout(resolve, 800));
       const response = await fetch('http://localhost:8000/api/issues');
       const data = await response.json();
-      setIssues(data);
+      // Ensure each issue has a unique id, fallback to index if missing
+      const issuesWithIds = data.map((issue, index) => ({
+        ...issue,
+        id: issue.id || `issue-${index}`
+      }));
+      setIssues(issuesWithIds);
       setStatus('✅ Successfully loaded issues!');
     } catch (error) {
       setStatus('🚨 Error fetching issues. Please try again later.');
@@ -242,77 +250,41 @@ function ReportIssue() {
       transition={{ duration: 0.5 }}
       className="container my-5"
       ref={ref}
+      style={{ backgroundColor: '#fff', color: '#000' }}
     >
       <div className="row justify-content-center">
         <div className="col-lg-10">
           <motion.div 
             className="card shadow-lg border-0 rounded-4 overflow-hidden"
+            style={{ backgroundColor: '#fff', color: '#000' }}
             initial={{ y: 50, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             transition={{ type: 'spring', stiffness: 100, damping: 15 }}
             whileHover={{ y: -5 }}
           >
-            <div className="card-header bg-gradient-primary text-white py-4 position-relative">
-              <div className="position-absolute w-100 h-100 top-0 start-0 overflow-hidden opacity-25">
-                <motion.div 
-                  className="position-absolute rounded-circle bg-white"
-                  style={{
-                    width: '300px',
-                    height: '300px',
-                    top: '-50px',
-                    right: '-50px'
-                  }}
-                  animate={{
-                    scale: [1, 1.2, 1],
-                    opacity: [0.1, 0.15, 0.1]
-                  }}
-                  transition={{
-                    duration: 8,
-                    repeat: Infinity,
-                    ease: "easeInOut"
-                  }}
-                />
-                <motion.div 
-                  className="position-absolute rounded-circle bg-white"
-                  style={{
-                    width: '200px',
-                    height: '200px',
-                    bottom: '-30px',
-                    left: '-30px'
-                  }}
-                  animate={{
-                    scale: [1, 1.3, 1],
-                    opacity: [0.1, 0.2, 0.1]
-                  }}
-                  transition={{
-                    duration: 6,
-                    repeat: Infinity,
-                    ease: "easeInOut",
-                    delay: 1
-                  }}
-                />
-              </div>
+            <div className="card-header bg-white py-4 position-relative" style={{ color: '#000' }}>
               <motion.h2 
                 className="h4 mb-0 text-center position-relative"
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.1 }}
+                style={{ color: '#000' }}
               >
-                <FiUploadCloud className="me-2" />
+                <FiUploadCloud className="me-2" style={{ color: '#000' }} />
                 Report a Community Issue 🏘️
               </motion.h2>
             </div>
             
-            <div className="card-body p-4 p-md-5">
+            <div className="card-body p-4 p-md-5" style={{ backgroundColor: '#fff', color: '#000' }}>
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.3 }}
               >
                 <motion.p 
-                  className="lead text-muted mb-4"
+                  className="lead mb-4"
                   animate={{
-                    color: ['#6c757d', '#0d6efd', '#6c757d']
+                    color: ['#000', '#000', '#000'] // Static black color
                   }}
                   transition={{
                     duration: 8,
@@ -333,19 +305,21 @@ function ReportIssue() {
                   variants={containerVariants}
                   initial="hidden"
                   animate={controls}
+                  style={{ backgroundColor: '#fff', color: '#000' }}
                 >
                   <motion.h3 
                     className="h5 mb-3 d-flex align-items-center"
                     variants={itemVariants}
+                    style={{ color: '#000' }}
                   >
-                    <FiRefreshCw className="me-2" />
+                    <FiRefreshCw className="me-2" style={{ color: '#000' }} />
                     📋 Recent Community Issues
                   </motion.h3>
                   
                   <motion.div className="list-group" variants={containerVariants}>
                     {issues.slice(0, 5).map((issue, index) => (
                       <IssueCard
-                        key={issue.id}
+                        key={issue.id} // Use issue.id as key
                         issue={issue}
                         index={index}
                         expanded={expandedIssue === issue.id}
@@ -357,7 +331,7 @@ function ReportIssue() {
               )}
             </div>
             
-            <div className="card-footer bg-light text-center py-3">
+            <div className="card-footer bg-light text-center py-3" style={{ backgroundColor: '#f8f9fa', color: '#000' }}>
               <motion.button
                 onClick={fetchIssues}
                 disabled={isLoading}
@@ -367,6 +341,7 @@ function ReportIssue() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.4 }}
+                style={{ backgroundColor: '#000', color: '#fff' }}
               >
                 {isLoading ? (
                   <>

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import './UploadForm.css';
 import API_BASE_URL from '../config';
 
@@ -7,6 +7,7 @@ function UploadForm({ setStatus, fetchIssues }) {
   const [preview, setPreview] = useState(null);
   const [description, setDescription] = useState('');
   const [address, setAddress] = useState('');
+  const [zipCode, setZipCode] = useState('');
   const [coordinates, setCoordinates] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [issueType, setIssueType] = useState('public');
@@ -20,6 +21,8 @@ function UploadForm({ setStatus, fetchIssues }) {
   const [editedReport, setEditedReport] = useState(null);
   const [successMessage, setSuccessMessage] = useState('');
   const fileInputRef = useRef(null);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
 
   const categories = {
     public: [
@@ -49,6 +52,13 @@ function UploadForm({ setStatus, fetchIssues }) {
     { value: 'business', label: 'Business/Private Issue (e.g., home repairs)' }
   ];
 
+  // Debug API response
+  useEffect(() => {
+    if (reportPreview) {
+      console.log('Report Preview:', reportPreview);
+    }
+  }, [reportPreview]);
+
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (file) {
@@ -67,6 +77,39 @@ function UploadForm({ setStatus, fetchIssues }) {
 
   const triggerFileInput = () => {
     fileInputRef.current.click();
+  };
+
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      videoRef.current.srcObject = stream;
+      videoRef.current.play();
+      setStatus('Camera started. Click "Capture Photo" to take a picture.');
+    } catch (error) {
+      setStatus('Error accessing camera: ' + error.message);
+    }
+  };
+
+  const capturePhoto = () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const imageDataUrl = canvas.toDataURL('image/jpeg');
+    canvas.toBlob((blob) => {
+      const file = new File([blob], 'captured-image.jpg', { type: 'image/jpeg' });
+      if (file.size > 5 * 1024 * 1024) {
+        setStatus('Captured image size exceeds 5MB limit');
+        return;
+      }
+      setImage(file);
+      setPreview(imageDataUrl);
+      // Stop the camera stream
+      const stream = video.srcObject;
+      stream.getTracks().forEach(track => track.stop());
+      setStatus('Photo captured successfully!');
+    }, 'image/jpeg');
   };
 
   const getLocation = () => {
@@ -99,15 +142,15 @@ function UploadForm({ setStatus, fetchIssues }) {
     e.preventDefault();
     
     if (!image) {
-      setStatus('Please upload an image');
+      setStatus('Please upload or capture an image');
       return;
     }
     if (!description || description.length > 500) {
       setStatus('Please provide a description (max 500 characters)');
       return;
     }
-    if (!address && !coordinates) {
-      setStatus('Please provide an address or use current location');
+    if (!address && !coordinates && !zipCode) {
+      setStatus('Please provide an address, zip code, or use current location');
       return;
     }
     if (!selectedCategory) {
@@ -122,7 +165,8 @@ function UploadForm({ setStatus, fetchIssues }) {
     formData.append('image', image);
     formData.append('description', description);
     formData.append('address', address);
-    formData.append('category', issueType); // Use issueType for category
+    formData.append('zip_code', zipCode);
+    formData.append('category', issueType);
     formData.append('severity', selectedSeverity);
     formData.append('issue_type', selectedCategory.toLowerCase().replace(/\s/g, '_'));
     
@@ -148,6 +192,7 @@ function UploadForm({ setStatus, fetchIssues }) {
         setPreview(null);
         setDescription('');
         setAddress('');
+        setZipCode('');
         setCoordinates(null);
         setIssueType('public');
         setSelectedCategory('');
@@ -157,6 +202,7 @@ function UploadForm({ setStatus, fetchIssues }) {
       }
     } catch (error) {
       setStatus('Network error. Please try again.');
+      console.error('Submit error:', error);
     } finally {
       setIsLoading(false);
     }
@@ -207,6 +253,7 @@ function UploadForm({ setStatus, fetchIssues }) {
       }
     } catch (error) {
       setStatus('Network error. Please try again.');
+      console.error('Accept error:', error);
     } finally {
       setIsLoading(false);
     }
@@ -248,6 +295,7 @@ function UploadForm({ setStatus, fetchIssues }) {
       }
     } catch (error) {
       setStatus('Network error. Please try again.');
+      console.error('Decline error:', error);
     } finally {
       setIsLoading(false);
     }
@@ -292,27 +340,48 @@ function UploadForm({ setStatus, fetchIssues }) {
             <label className="section-label">Visual Evidence</label>
             <div 
               className={`image-upload-area ${preview ? 'has-image' : ''}`}
-              onClick={triggerFileInput}
             >
               {preview ? (
                 <div className="image-preview-container">
                   <img src={preview} alt="Preview" className="image-preview" />
-                  <button 
-                    type="button" 
-                    className="change-image-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      triggerFileInput();
-                    }}
-                  >
-                    <i className="fas fa-camera"></i> Change Image
-                  </button>
+                  <div className="image-buttons">
+                    <button 
+                      type="button" 
+                      className="change-image-btn"
+                      onClick={triggerFileInput}
+                    >
+                      <i className="fas fa-camera"></i> Change Image
+                    </button>
+                    <button 
+                      type="button" 
+                      className="capture-image-btn"
+                      onClick={startCamera}
+                    >
+                      <i className="fas fa-camera-retro"></i> Capture New Photo
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="upload-placeholder">
                   <i className="fas fa-camera upload-icon"></i>
-                  <p>Click to upload an image</p>
+                  <p>Click to upload or capture an image</p>
                   <p className="hint">Max 5MB • JPEG</p>
+                  <div className="image-buttons">
+                    <button 
+                      type="button" 
+                      className="upload-btn"
+                      onClick={triggerFileInput}
+                    >
+                      <i className="fas fa-upload"></i> Upload Image
+                    </button>
+                    <button 
+                      type="button" 
+                      className="capture-btn"
+                      onClick={startCamera}
+                    >
+                      <i className="fas fa-camera-retro"></i> Capture Photo
+                    </button>
+                  </div>
                 </div>
               )}
               <input
@@ -321,8 +390,18 @@ function UploadForm({ setStatus, fetchIssues }) {
                 className="file-input"
                 accept="image/*"
                 onChange={handleImageChange}
-                required
               />
+              <video ref={videoRef} className="camera-stream" style={{ display: preview ? 'none' : 'block' }} />
+              <canvas ref={canvasRef} style={{ display: 'none' }} />
+              {videoRef.current?.srcObject && !preview && (
+                <button 
+                  type="button" 
+                  className="capture-image-btn"
+                  onClick={capturePhoto}
+                >
+                  <i className="fas fa-camera"></i> Capture Photo
+                </button>
+              )}
             </div>
           </div>
 
@@ -390,6 +469,16 @@ function UploadForm({ setStatus, fetchIssues }) {
                 onChange={(e) => setAddress(e.target.value)}
                 placeholder="Street address or landmark"
               />
+              <label className="section-label">Zip Code</label>
+              <input
+                type="text"
+                className="zip-code-input"
+                value={zipCode}
+                onChange={(e) => setZipCode(e.target.value)}
+                placeholder="Zip code (e.g., 12345)"
+                maxLength={5}
+                pattern="\d{5}"
+              />
               <div className="location-or">OR</div>
               <div className="gps-section">
                 <div className="coordinates-display">
@@ -440,10 +529,12 @@ function UploadForm({ setStatus, fetchIssues }) {
         </form>
       ) : (
         <div className="report-preview-container">
-          <h3 className="report-preview-header">
-            <i className="fas fa-file-alt header-icon"></i>
-            Review Generated Report
-          </h3>
+          <div className="form-header">
+            <h3 className="report-preview-header">
+              <i className="fas fa-file-alt header-icon"></i>
+              Review Generated Report
+            </h3>
+          </div>
           
           <button 
             className="edit-btn"
@@ -492,8 +583,9 @@ function UploadForm({ setStatus, fetchIssues }) {
             <div className="report-section">
               <h4>Location Details</h4>
               <p><strong>Address:</strong> {reportPreview.report.template_fields.address || 'Not specified'}</p>
+              <p><strong>Zip Code:</strong> {reportPreview.report.template_fields.zip_code || 'Not specified'}</p>
               <p><strong>Map Link:</strong> 
-                <a href={reportPreview.report.template_fields.map_link} target="_blank">
+                <a href={reportPreview.report.template_fields.map_link} target="_blank" rel="noopener noreferrer">
                   {reportPreview.report.template_fields.map_link || 'No map link available'}
                 </a>
               </p>
@@ -518,8 +610,16 @@ function UploadForm({ setStatus, fetchIssues }) {
             
             <div className="report-section">
               <h4>Photo Evidence</h4>
-              <img src={`data:image/jpeg;base64,${reportPreview.image_content}`} alt="Issue" className="report-image" />
-              <p><small>File: {reportPreview.report.template_fields.image_filename}</small></p>
+              {reportPreview.image_content ? (
+                <img 
+                  src={`data:image/jpeg;base64,${reportPreview.image_content}`} 
+                  alt="Issue" 
+                  className="report-image" 
+                />
+              ) : (
+                <p className="text-red-500">No image available</p>
+              )}
+              <p><small>File: {reportPreview.report.template_fields.image_filename || 'Not specified'}</small></p>
             </div>
             
             <div className="report-section">

@@ -8,8 +8,9 @@ import os
 from datetime import datetime
 import pytz
 import re
-from utils.constants import issue_category_map, issue_department_map
-from utils.timezone_utils import get_timezone_name  # Updated import
+from pathlib import Path
+from utils.timezone import get_timezone_name
+from typing import Optional, Dict, Any
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,6 +22,21 @@ if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY is not set")
 
 genai.configure(api_key=GEMINI_API_KEY)
+
+def load_json_data(file_name: str) -> dict:
+    """Load JSON data from a file."""
+    try:
+        file_path = Path(__file__).parent.parent / "data" / file_name
+        with open(file_path, "r") as file:
+            data = json.load(file)
+        logger.debug(f"Loaded JSON data from {file_path}")
+        return data
+    except FileNotFoundError:
+        logger.error(f"JSON file {file_path} not found")
+        return {}
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to decode JSON from {file_path}: {str(e)}")
+        return {}
 
 def classify_issue(image_content: bytes, description: str) -> tuple[str, str, float, str, str]:
     try:
@@ -76,6 +92,8 @@ Ensure the issue_type matches one of the specified options. For descriptions men
             else "Low"
         )
 
+        # Load category from JSON
+        issue_category_map = load_json_data("issue_category_map.json")
         category = issue_category_map.get(issue_type, "public")
         priority = "High" if severity == "High" or confidence > 90 else "Medium"
 
@@ -85,31 +103,47 @@ Ensure the issue_type matches one of the specified options. For descriptions men
         logger.error(f"Error classifying issue: {e}")
         return "unknown", "Medium", 50.0, "public", "Medium"
 
-def generate_report(image_content: bytes, description: str, issue_type: str, severity: str,
-                    address: str, latitude: float, longitude: float,
-                    issue_id: str, confidence: float, category: str, priority: str) -> dict:
+def generate_report(
+    image_content: bytes,
+    description: str,
+    issue_type: str,
+    severity: str,
+    address: str,
+    zip_code: Optional[str],
+    latitude: float,
+    longitude: float,
+    issue_id: str,
+    confidence: float,
+    category: str,
+    priority: str,
+    decline_reason: Optional[str] = None
+) -> Dict[str, Any]:
     try:
         model = genai.GenerativeModel("gemini-1.5-flash")
         location_str = (
-            address if address and address.lower() != "not specified"
+            f"{address}, {zip_code}" if address and address.lower() != "not specified" and zip_code
+            else address if address and address.lower() != "not specified"
             else f"Coordinates: {latitude}, {longitude}" if latitude and longitude
             else "Unknown Location"
         )
-        department = issue_department_map.get(issue_type, "City Department")
+        # Load department from JSON
+        issue_department_map = load_json_data("issue_department_map.json")
+        department = issue_department_map.get(issue_type, ["general"])[0] if issue_department_map.get(issue_type) else "general"
         map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
 
         # Get the correct timezone based on coordinates
         timezone_str = get_timezone_name(latitude, longitude)
         timezone = pytz.timezone(timezone_str)
-
-        # Generate template fields
-        now = datetime.now(timezone)  # Use the local timezone
+        now = datetime.now(timezone)
         local_time = now.strftime("%Y-%m-%d %H:%M")
         utc_time = now.astimezone(pytz.UTC).strftime("%H:%M")
         report_number = str(int(now.strftime("%Y%m%d%H%M%S")) % 1000000).zfill(6)
         report_id = f"SNAPFIX-{now.year}-{report_number}"
         image_filename = f"IMG1_{now.strftime('%Y%m%d_%H%M')}.jpg"
 
+        # Include decline_reason and zip_code in prompt if provided
+        decline_prompt = f"- Decline Reason: {decline_reason}\n" if decline_reason else ""
+        zip_code_prompt = f"- Zip Code: {zip_code}\n" if zip_code else ""
         prompt = f"""
 You are an AI assistant for SnapFix AI, generating infrastructure issue reports.
 Analyze the input below and return a structured JSON report (no markdown, no explanation).
@@ -125,8 +159,11 @@ Input:
 - Responsible Department: {department}
 - Map Link: {map_link}
 - Priority: {priority}
-
+{decline_prompt}
+{zip_code_prompt}
 For potholes, recommend specific actions like "Fill pothole and mark with cones within 48 hours."
+If a decline reason is provided, incorporate it into the summary_explanation and add a feedback field in detailed_analysis.
+Include the zip code in the summary_explanation if provided.
 Return this structure:
 {{
   "issue_overview": {{
@@ -134,7 +171,7 @@ Return this structure:
     "severity": "{severity.lower()}",
     "confidence": {confidence},
     "category": "{category}",
-    "summary_explanation": "Write a 4 to 5 line detailed explanation based on the provided image and description. Mention what visual elements helped identify the issue, how the description supported the classification, and specify the location clearly. The tone should be professional and focused on public infrastructure impact."
+    "summary_explanation": "Write a 4 to 5 line detailed explanation based on the provided image and description. Mention what visual elements helped identify the issue, how the description supported the classification, and specify the location clearly (include zip code if provided). If a decline reason is provided, include it. The tone should be professional and focused on public infrastructure impact."
   }},
   "detailed_analysis": {{
     "root_causes": "Possible causes of the issue.",
@@ -142,7 +179,8 @@ Return this structure:
     "public_safety_risk": "low|medium|high",
     "environmental_impact": "low|medium|high|none",
     "structural_implications": "low|medium|high|none",
-    "legal_or_regulatory_considerations": "Relevant regulations or null"
+    "legal_or_regulatory_considerations": "Relevant regulations or null",
+    "feedback": "User-provided decline reason: {decline_reason}" if decline_reason else null
   }},
   "recommended_actions": ["Action 1", "Action 2"],
   "responsible_authorities_or_parties": [
@@ -152,7 +190,7 @@ Return this structure:
       "reason_for_responsibility": "Reason for responsibility."
     }}
   ],
-  "additional_notes": "Location: {location_str}. View live location: {map_link}. Issue ID: {issue_id}",
+  "additional_notes": "Location: {location_str}. View live location: {map_link}. Issue ID: {issue_id}. Zip Code: {zip_code if zip_code else 'N/A'}.",
   "template_fields": {{
     "oid": "{report_id}",
     "timestamp": "{local_time}",
@@ -163,7 +201,8 @@ Return this structure:
     "ai_tag": "{issue_type.title()}",
     "app_version": "1.5.3",
     "device_type": "Mobile (Generic)",
-    "map_link": "{map_link}"
+    "map_link": "{map_link}",
+    "zip_code": "{zip_code if zip_code else 'N/A'}"
   }}
 }}
 Keep the report under 200 words, professional, and specific to the issue type and description.
@@ -175,8 +214,9 @@ Keep the report under 200 words, professional, and specific to the issue type an
         json_text = response.text[response.text.find("{"):response.text.rfind("}") + 1]
         report = json.loads(json_text)
 
-        report["additional_notes"] = f"Location: {location_str}. View live location: {map_link}. Issue ID: {issue_id}"
+        report["additional_notes"] = f"Location: {location_str}. View live location: {map_link}. Issue ID: {issue_id}. Zip Code: {zip_code if zip_code else 'N/A'}."
         report["template_fields"]["map_link"] = map_link
+        report["template_fields"]["zip_code"] = zip_code if zip_code else "N/A"
         return report
     except Exception as e:
         logger.error(f"Error generating report: {e}")
@@ -189,7 +229,13 @@ Keep the report under 200 words, professional, and specific to the issue type an
         report_id = f"SNAPFIX-{now.year}-{report_number}"
         image_filename = f"IMG1_{now.strftime('%Y%m%d_%H%M')}.jpg"
         map_link = f"https://www.google.com/maps?q={latitude},{longitude}" if latitude and longitude else "Coordinates unavailable"
-        return {
+        location_str = (
+            f"{address}, {zip_code}" if address and address.lower() != "not specified" and zip_code
+            else address if address and address.lower() != "not specified"
+            else f"Coordinates: {latitude}, {longitude}" if latitude and longitude
+            else "Unknown Location"
+        )
+        report = {
             "issue_overview": {
                 "issue_type": issue_type.title(),
                 "severity": severity.lower(),
@@ -203,7 +249,8 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 "public_safety_risk": severity.lower(),
                 "environmental_impact": "none" if issue_type == "pothole" else "low",
                 "structural_implications": "low" if issue_type not in ["structural_damage", "property_damage"] else "medium",
-                "legal_or_regulatory_considerations": "Road safety regulations." if issue_type == "pothole" else "Local regulations may apply."
+                "legal_or_regulatory_considerations": "Road safety regulations." if issue_type == "pothole" else "Local regulations may apply.",
+                "feedback": f"User-provided decline reason: {decline_reason}" if decline_reason else None
             },
             "recommended_actions": [
                 "Fill pothole and mark with cones within 48 hours." if issue_type == "pothole" else f"Notify the {department} for immediate action.",
@@ -216,7 +263,7 @@ Keep the report under 200 words, professional, and specific to the issue type an
                     "reason_for_responsibility": f"Handles {issue_type} issues in {category} areas."
                 }
             ],
-            "additional_notes": f"Location: {location_str}. View live location: {map_link}. Issue ID: {issue_id}",
+            "additional_notes": f"Location: {location_str}. View live location: {map_link}. Issue ID: {issue_id}. Zip Code: {zip_code if zip_code else 'N/A'}.",
             "template_fields": {
                 "oid": report_id,
                 "timestamp": local_time,
@@ -227,6 +274,10 @@ Keep the report under 200 words, professional, and specific to the issue type an
                 "ai_tag": issue_type.title(),
                 "app_version": "1.5.3",
                 "device_type": "Mobile (Generic)",
-                "map_link": map_link
+                "map_link": map_link,
+                "zip_code": zip_code if zip_code else "N/A"
             }
         }
+        if decline_reason:
+            report["issue_overview"]["summary_explanation"] += f" Declined due to: {decline_reason}."
+        return report
