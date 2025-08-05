@@ -8,7 +8,7 @@ import uvicorn
 import json
 from pathlib import Path
 
-# Setup logging
+# Setup logging with detailed format
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -16,36 +16,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
+# Create FastAPI app
 app = FastAPI(title="SnapFix AI Backend")
 
-# Setup CORS
+# Enable CORS for frontend access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://snapfix-ai-frontend-24jlyd3yv-rishav-momntumais-projects.vercel.app",
-        "http://localhost:3000",
-        "http://localhost:5173",
+        "https://snapfix-ai-frontend-24jlyd3yv-rishav-momntumais-projects.vercel.app",  # Current frontend URL
+        "https://snapfix-ai-frontend-git-main-rishav-momntumais-projects.vercel.app",  # Alternative frontend URL
+        "http://localhost:5173",             # Local development (Vite default)
+        "http://localhost:3000",             # Local development (React default)
+        "http://localhost:3001"              # Local development (Alternative port)
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+@app.get("/ping")
+async def ping():
+    return {"message": "pong"}
 
-# Middleware to log all requests
+# Log all incoming requests
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    logger.debug(f"Incoming request: {request.method} {request.url}")
+    logger.debug(f"Incoming request: {request.method} {request.url} from {request.client.host}")
     try:
         response = await call_next(request)
-        logger.debug(f"Completed with status: {response.status_code}")
+        logger.debug(f"Response status: {response.status_code} for {request.method} {request.url}")
         return response
     except Exception as e:
-        logger.error(f"Request error: {str(e)}", exc_info=True)
+        logger.error(f"Error processing request {request.method} {request.url}: {str(e)}", exc_info=True)
         raise
 
-# Global error handler
+# Global exception handler for unhandled errors
 @app.exception_handler(Exception)
 async def custom_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception in {request.method} {request.url}: {str(exc)}", exc_info=True)
@@ -54,31 +59,31 @@ async def custom_exception_handler(request: Request, exc: Exception):
         content={"detail": f"Internal server error: {str(exc)}"}
     )
 
-# Root endpoint
+# Root route to test backend
 @app.get("/")
 async def read_root():
+    logger.debug("Root endpoint accessed")
     return {"message": "SnapFix AI backend is up and running!"}
-
-# Ping endpoint for testing
-@app.get("/ping")
-async def ping():
-    return {"message": "pong"}
 
 # Favicon route
 @app.get("/favicon.ico")
 async def favicon():
+    logger.debug("Favicon requested")
     favicon_path = "static/favicon.ico"
     if os.path.exists(favicon_path):
         return FileResponse(favicon_path)
+    logger.warning("Favicon file not found")
     raise HTTPException(status_code=404, detail="Favicon not found")
 
 # Health check endpoint
 @app.get("/health")
 async def health_check():
+    logger.debug("Health check endpoint called")
     try:
         from services.mongodb_service import get_db
         db = get_db()
         db.command("ping")
+        logger.debug("Database ping successful")
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
@@ -87,34 +92,48 @@ async def health_check():
 # Authorities endpoint
 @app.get("/api/authorities/{zip_code}")
 async def get_authorities_by_zip_code(zip_code: str):
+    logger.debug(f"Authorities requested for zip code: {zip_code}")
     try:
+        # Load authorities from JSON file
         zip_code_authorities_path = Path("data/zip_code_authorities.json")
         if not zip_code_authorities_path.exists():
+            logger.error("Zip code authorities file not found")
             raise HTTPException(status_code=404, detail="Authorities data not found")
-
+            
         with open(zip_code_authorities_path, "r") as f:
             authorities_data = json.load(f)
-
-        authorities = authorities_data.get(zip_code, authorities_data.get("default", {}))
+        
+        # Get authorities for the specified zip code or use default
+        authorities = {}
+        if zip_code in authorities_data:
+            authorities = authorities_data[zip_code]
+        else:
+            logger.warning(f"No authorities found for zip code {zip_code}, using default")
+            authorities = authorities_data.get("default", {})
+        
+        # Format authorities as a list of objects by type
         formatted_authorities = {}
         for auth_type, auth_list in authorities.items():
-            formatted_authorities.setdefault(auth_type, []).extend(auth_list)
+            if auth_type not in formatted_authorities:
+                formatted_authorities[auth_type] = []
+            formatted_authorities[auth_type].extend(auth_list)
+            
         return formatted_authorities
-
+            
     except Exception as e:
-        logger.error(f"Error fetching authorities for {zip_code}: {str(e)}")
+        logger.error(f"Error fetching authorities for zip code {zip_code}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching authorities: {str(e)}")
 
-# Mount your API router
+# Include API routes
 app.include_router(issues_router, prefix="/api")
 
-# Startup event
+# Log startup
 @app.on_event("startup")
 async def startup_event():
     logger.info("SnapFix AI backend started successfully")
 
-# Entrypoint for Render
+# Run the app
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))  # Use Render's dynamic port
+    port = int(os.environ.get("PORT", 10000))  # Render injects PORT
     logger.info(f"Starting server on port {port}")
     uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="debug")
