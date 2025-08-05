@@ -1,18 +1,42 @@
 import { useState, useRef, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  Camera, 
+  Upload, 
+  MapPin, 
+  FileText, 
+  Edit, 
+  Check, 
+  X, 
+  Loader, 
+  AlertCircle,
+  Image as ImageIcon,
+  Map,
+  Navigation,
+  RotateCcw,
+  Save,
+  Send,
+  ChevronLeft,
+  ChevronRight,
+  Info,
+  Star,
+  Shield,
+  Clock,
+  Target,
+  Users,
+  Building,
+  Zap
+} from 'lucide-react';
 import './UploadForm.css';
 import API_BASE_URL from '../config';
 
 function UploadForm({ setStatus, fetchIssues }) {
   const [image, setImage] = useState(null);
   const [preview, setPreview] = useState(null);
-  const [description, setDescription] = useState('');
   const [address, setAddress] = useState('');
   const [zipCode, setZipCode] = useState('');
   const [coordinates, setCoordinates] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [issueType, setIssueType] = useState('public');
-  const [selectedCategory, setSelectedCategory] = useState('');
-  const [selectedSeverity, setSelectedSeverity] = useState('medium');
   const [reportPreview, setReportPreview] = useState(null);
   const [issueId, setIssueId] = useState(null);
   const [declineReason, setDeclineReason] = useState('');
@@ -20,76 +44,99 @@ function UploadForm({ setStatus, fetchIssues }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editedReport, setEditedReport] = useState(null);
   const [successMessage, setSuccessMessage] = useState('');
+  const [activeStep, setActiveStep] = useState(0);
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const [formErrors, setFormErrors] = useState({});
+  const [showAuthoritySelector, setShowAuthoritySelector] = useState(false);
+  const [availableAuthorities, setAvailableAuthorities] = useState({});
+  const [selectedAuthorities, setSelectedAuthorities] = useState([]);
+  
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-
-  const categories = {
-    public: [
-      'Pothole', 'Broken Streetlight', 'Graffiti', 'Garbage', 'Fire Hazard',
-      'Road Damage', 'Vandalism', 'Flood', 'Other'
-    ],
-    business: [
-      'Furniture Damage', 'Home Repair', 'Property Damage', 'Other'
-    ]
-  };
-
+  
   const severities = [
-    { value: 'low', label: 'Low' },
-    { value: 'medium', label: 'Medium' },
-    { value: 'high', label: 'High' },
-    { value: 'critical', label: 'Critical' }
+    { value: 'low', label: 'Low', color: 'bg-green-500', icon: <Star className="w-4 h-4" /> },
+    { value: 'medium', label: 'Medium', color: 'bg-yellow-500', icon: <Clock className="w-4 h-4" /> },
+    { value: 'high', label: 'High', color: 'bg-orange-500', icon: <AlertCircle className="w-4 h-4" /> },
+    { value: 'critical', label: 'Critical', color: 'bg-red-500', icon: <Zap className="w-4 h-4" /> }
   ];
-
-  const priorities = [
-    { value: 'Low', label: 'Low' },
-    { value: 'Medium', label: 'Medium' },
-    { value: 'High', label: 'High' }
+  
+  const formSteps = [
+    { title: 'Visual Evidence', icon: <ImageIcon className="w-5 h-5" /> },
+    { title: 'Location', icon: <MapPin className="w-5 h-5" /> },
+    { title: 'Review', icon: <FileText className="w-5 h-5" /> }
   ];
-
-  const issueTypes = [
-    { value: 'public', label: 'Public Issue (e.g., potholes, garbage)' },
-    { value: 'business', label: 'Business/Private Issue (e.g., home repairs)' }
-  ];
-
+  
   // Debug API response
   useEffect(() => {
     if (reportPreview) {
       console.log('Report Preview:', reportPreview);
     }
   }, [reportPreview]);
-
+  
+  // Fetch authorities based on zip code
+  useEffect(() => {
+    if (editedReport && editedReport.location && editedReport.location.zip_code) {
+      fetchAuthoritiesByZipCode(editedReport.location.zip_code);
+    }
+  }, [editedReport]);
+  
+  // Fetch authorities by zip code
+  const fetchAuthoritiesByZipCode = async (zipCode) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/authorities/${zipCode}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch authorities');
+      }
+      const data = await response.json();
+      setAvailableAuthorities(data);
+      
+      // Initialize selected authorities from current report
+      if (editedReport && editedReport.responsible_authorities_or_parties) {
+        setSelectedAuthorities(editedReport.responsible_authorities_or_parties);
+      }
+    } catch (error) {
+      console.error('Error fetching authorities:', error);
+      setStatus('Error fetching authorities. Using default list.');
+    }
+  };
+  
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (file) {
       if (file.size > 5 * 1024 * 1024) {
         setStatus('Image size exceeds 5MB limit');
+        setFormErrors({...formErrors, image: 'Image size exceeds 5MB limit'});
         return;
       }
       setImage(file);
+      setFormErrors({...formErrors, image: null});
       const reader = new FileReader();
       reader.onloadend = () => {
         setPreview(reader.result);
+        setActiveStep(1); // Move to next step
       };
       reader.readAsDataURL(file);
     }
   };
-
+  
   const triggerFileInput = () => {
     fileInputRef.current.click();
   };
-
+  
   const startCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       videoRef.current.srcObject = stream;
       videoRef.current.play();
+      setIsCameraActive(true);
       setStatus('Camera started. Click "Capture Photo" to take a picture.');
     } catch (error) {
       setStatus('Error accessing camera: ' + error.message);
     }
   };
-
+  
   const capturePhoto = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -101,17 +148,29 @@ function UploadForm({ setStatus, fetchIssues }) {
       const file = new File([blob], 'captured-image.jpg', { type: 'image/jpeg' });
       if (file.size > 5 * 1024 * 1024) {
         setStatus('Captured image size exceeds 5MB limit');
+        setFormErrors({...formErrors, image: 'Captured image size exceeds 5MB limit'});
         return;
       }
       setImage(file);
+      setFormErrors({...formErrors, image: null});
       setPreview(imageDataUrl);
+      setIsCameraActive(false);
       // Stop the camera stream
       const stream = video.srcObject;
       stream.getTracks().forEach(track => track.stop());
       setStatus('Photo captured successfully!');
+      setActiveStep(1); // Move to next step
     }, 'image/jpeg');
   };
-
+  
+  const stopCamera = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject;
+      stream.getTracks().forEach(track => track.stop());
+      setIsCameraActive(false);
+    }
+  };
+  
   const getLocation = () => {
     setIsLoading(true);
     setStatus('Getting your location...');
@@ -125,89 +184,89 @@ function UploadForm({ setStatus, fetchIssues }) {
           });
           setStatus('Location captured successfully');
           setIsLoading(false);
+          setFormErrors({...formErrors, location: null});
         },
         (error) => {
           setStatus(`Error: ${error.message}`);
           setIsLoading(false);
+          setFormErrors({...formErrors, location: error.message});
         },
         { enableHighAccuracy: true, timeout: 10000 }
       );
     } else {
       setStatus('Geolocation is not supported by your browser');
       setIsLoading(false);
+      setFormErrors({...formErrors, location: 'Geolocation is not supported by your browser'});
     }
   };
-
+  
   const handleSubmit = async (e) => {
     e.preventDefault();
     
-    if (!image) {
-      setStatus('Please upload or capture an image');
+    // Validate form
+    const errors = {};
+    if (!image) errors.image = 'Please upload or capture an image';
+    if (!address && !coordinates && !zipCode) errors.location = 'Please provide an address, zip code, or use current location';
+    
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
       return;
     }
-    if (!description || description.length > 500) {
-      setStatus('Please provide a description (max 500 characters)');
-      return;
-    }
-    if (!address && !coordinates && !zipCode) {
-      setStatus('Please provide an address, zip code, or use current location');
-      return;
-    }
-    if (!selectedCategory) {
-      setStatus('Please select a category');
-      return;
-    }
-
+    
     setIsLoading(true);
     setStatus('Generating report...');
-
     const formData = new FormData();
     formData.append('image', image);
-    formData.append('description', description);
     formData.append('address', address);
     formData.append('zip_code', zipCode);
-    formData.append('category', issueType);
-    formData.append('severity', selectedSeverity);
-    formData.append('issue_type', selectedCategory.toLowerCase().replace(/\s/g, '_'));
     
     if (coordinates) {
       formData.append('latitude', coordinates.latitude);
       formData.append('longitude', coordinates.longitude);
     }
-
+    
     try {
-      const response = await fetch(`${API_BASE_URL}/api/issues`, {
+      const response = await fetch(`${API_BASE_URL}/issues`, {
         method: 'POST',
         body: formData,
+        headers: {
+          'Accept': 'application/json'
+        },
       });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorMessage;
+        try {
+          const errorJson = JSON.parse(errorText);
+          errorMessage = errorJson.detail || 'Failed to generate report';
+        } catch (e) {
+          errorMessage = errorText || 'Failed to generate report';
+        }
+        throw new Error(errorMessage);
+      }
       
       const result = await response.json();
       
-      if (response.ok) {
-        setStatus('Report generated! Please review.');
-        setReportPreview(result.report);
-        setEditedReport(result.report.report);
-        setIssueId(result.id);
-        setImage(null);
-        setPreview(null);
-        setDescription('');
-        setAddress('');
-        setZipCode('');
-        setCoordinates(null);
-        setIssueType('public');
-        setSelectedCategory('');
-        setSelectedSeverity('medium');
-      } else {
-        setStatus(`Error: ${result.detail || 'Failed to generate report'}`);
-      }
+      setStatus('Report generated! Please review.');
+      setReportPreview(result.report);
+      setEditedReport(result.report.report);
+      setIssueId(result.id);
+      setImage(null);
+      setPreview(null);
+      setAddress('');
+      setZipCode('');
+      setCoordinates(null);
+      setActiveStep(2); // Move to review step
     } catch (error) {
-      setStatus('Network error. Please try again.');
       console.error('Submit error:', error);
+      setStatus(`Submit error: ${error.message}`);
+      setFormErrors({...formErrors, submit: error.message});
     } finally {
       setIsLoading(false);
     }
   };
-
+  
   const handleEditChange = (section, field, value, index = null) => {
     setEditedReport((prev) => {
       const updated = { ...prev };
@@ -219,18 +278,18 @@ function UploadForm({ setStatus, fetchIssues }) {
       return updated;
     });
   };
-
+  
   const toggleEdit = () => {
     setIsEditing(!isEditing);
     setStatus(isEditing ? 'Report preview updated.' : 'Editing report...');
   };
-
+  
   const handleAccept = async () => {
     setIsLoading(true);
     setStatus('Submitting report...');
   
     try {
-      const response = await fetch(`${API_BASE_URL}/api/issues/${issueId}/accept`, {
+      const response = await fetch(`${API_BASE_URL}/issues/${issueId}/accept`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ edited_report: editedReport }),
@@ -248,35 +307,39 @@ function UploadForm({ setStatus, fetchIssues }) {
         setShowDeclineForm(false);
         setDeclineReason('');
         setIsEditing(false);
+        setActiveStep(0); // Reset to first step
       } else {
         setStatus(`Error: ${result.detail || 'Failed to submit issue'}`);
+        setFormErrors({...formErrors, accept: result.detail || 'Failed to submit issue'});
       }
     } catch (error) {
       setStatus('Network error. Please try again.');
       console.error('Accept error:', error);
+      setFormErrors({...formErrors, accept: 'Network error. Please try again'});
     } finally {
       setIsLoading(false);
     }
   };
-
+  
   const handleDecline = () => {
     setShowDeclineForm(true);
     setStatus('Please provide a reason for rejecting the report.');
   };
-
+  
   const handleDeclineSubmit = async (e) => {
     e.preventDefault();
     
     if (!declineReason) {
       setStatus('Please provide a decline reason.');
+      setFormErrors({...formErrors, decline: 'Please provide a decline reason'});
       return;
     }
-
+    
     setIsLoading(true);
     setStatus('Generating updated report...');
-
+    
     try {
-      const response = await fetch(`${API_BASE_URL}/api/issues/${issueId}/decline`, {
+      const response = await fetch(`${API_BASE_URL}/issues/${issueId}/decline`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decline_reason: declineReason, edited_report: editedReport }),
@@ -290,282 +353,518 @@ function UploadForm({ setStatus, fetchIssues }) {
         setEditedReport(result.report.report);
         setShowDeclineForm(false);
         setDeclineReason('');
+        setFormErrors({...formErrors, decline: null});
       } else {
         setStatus(`Error: ${result.detail || 'Failed to generate updated report'}`);
+        setFormErrors({...formErrors, decline: result.detail || 'Failed to generate updated report'});
       }
     } catch (error) {
       setStatus('Network error. Please try again.');
       console.error('Decline error:', error);
+      setFormErrors({...formErrors, decline: 'Network error. Please try again'});
     } finally {
       setIsLoading(false);
     }
   };
-
+  
+  const nextStep = () => {
+    if (activeStep < formSteps.length - 1) {
+      setActiveStep(activeStep + 1);
+    }
+  };
+  
+  const prevStep = () => {
+    if (activeStep > 0) {
+      setActiveStep(activeStep - 1);
+    }
+  };
+  
+  const resetForm = () => {
+    setImage(null);
+    setPreview(null);
+    setAddress('');
+    setZipCode('');
+    setCoordinates(null);
+    setReportPreview(null);
+    setIssueId(null);
+    setDeclineReason('');
+    setShowDeclineForm(false);
+    setIsEditing(false);
+    setEditedReport(null);
+    setSuccessMessage('');
+    setActiveStep(0);
+    setFormErrors({});
+    stopCamera();
+  };
+  
+  // Handle authority selection
+  const handleAuthoritySelection = (authority) => {
+    // Check if authority is already selected
+    const isSelected = selectedAuthorities.some(a => 
+      a.name === authority.name && a.type === authority.type
+    );
+    
+    if (isSelected) {
+      // Remove from selection
+      setSelectedAuthorities(selectedAuthorities.filter(a => 
+        !(a.name === authority.name && a.type === authority.type)
+      ));
+    } else {
+      // Add to selection
+      setSelectedAuthorities([...selectedAuthorities, authority]);
+    }
+  };
+  
+  // Save selected authorities
+  const saveSelectedAuthorities = () => {
+    setEditedReport(prev => ({
+      ...prev,
+      responsible_authorities_or_parties: selectedAuthorities
+    }));
+    setShowAuthoritySelector(false);
+    setStatus('Authorities updated successfully');
+  };
+  
   return (
-    <div className="upload-form-container">
+    <motion.div 
+      className="upload-form-container"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.5 }}
+    >
       <div className="form-header">
-        <h4>
-          <i className="fas fa-bullhorn header-icon"></i>
-          Report an Issue
-        </h4>
-        <p className="subtitle">Help improve your community by reporting issues</p>
+        <motion.div 
+          className="header-icon-container"
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ delay: 0.2, type: "spring", stiffness: 300 }}
+        >
+          <div className="header-icon-bg">
+            <Camera className="header-icon" />
+          </div>
+        </motion.div>
+        <div>
+          <h3 className="form-title">Report an Issue</h3>
+          <p className="form-subtitle">Help improve your community by reporting issues</p>
+        </div>
       </div>
-
-      {!reportPreview ? (
-        <form onSubmit={handleSubmit} className="issue-form">
-          <div className="form-section">
-            <label className="section-label">Type of Issue</label>
-            <div className="issue-type-selector">
-              {issueTypes.map((type) => (
-                <label key={type.value} className="issue-type-option">
-                  <input
-                    type="radio"
-                    name="issueType"
-                    value={type.value}
-                    checked={issueType === type.value}
-                    onChange={() => {
-                      setIssueType(type.value);
-                      setSelectedCategory('');
-                    }}
-                  />
-                  <span className={`issue-type-label ${type.value}`}>
-                    {type.label}
-                  </span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="form-section">
-            <label className="section-label">Visual Evidence</label>
-            <div 
-              className={`image-upload-area ${preview ? 'has-image' : ''}`}
-            >
-              {preview ? (
-                <div className="image-preview-container">
-                  <img src={preview} alt="Preview" className="image-preview" />
-                  <div className="image-buttons">
-                    <button 
-                      type="button" 
-                      className="change-image-btn"
-                      onClick={triggerFileInput}
-                    >
-                      <i className="fas fa-camera"></i> Change Image
-                    </button>
-                    <button 
-                      type="button" 
-                      className="capture-image-btn"
-                      onClick={startCamera}
-                    >
-                      <i className="fas fa-camera-retro"></i> Capture New Photo
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="upload-placeholder">
-                  <i className="fas fa-camera upload-icon"></i>
-                  <p>Click to upload or capture an image</p>
-                  <p className="hint">Max 5MB • JPEG</p>
-                  <div className="image-buttons">
-                    <button 
-                      type="button" 
-                      className="upload-btn"
-                      onClick={triggerFileInput}
-                    >
-                      <i className="fas fa-upload"></i> Upload Image
-                    </button>
-                    <button 
-                      type="button" 
-                      className="capture-btn"
-                      onClick={startCamera}
-                    >
-                      <i className="fas fa-camera-retro"></i> Capture Photo
-                    </button>
-                  </div>
-                </div>
-              )}
-              <input
-                type="file"
-                ref={fileInputRef}
-                className="file-input"
-                accept="image/*"
-                onChange={handleImageChange}
-              />
-              <video ref={videoRef} className="camera-stream" style={{ display: preview ? 'none' : 'block' }} />
-              <canvas ref={canvasRef} style={{ display: 'none' }} />
-              {videoRef.current?.srcObject && !preview && (
-                <button 
-                  type="button" 
-                  className="capture-image-btn"
-                  onClick={capturePhoto}
-                >
-                  <i className="fas fa-camera"></i> Capture Photo
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="form-section">
-            <label htmlFor="description" className="section-label">Description</label>
-            <textarea
-              id="description"
-              className="description-input"
-              rows="4"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe the issue in detail (max 500 characters)..."
-              maxLength={500}
-              required
-            />
-          </div>
-
-          <div className="form-row">
-            <div className="form-section">
-              <label className="section-label">Category</label>
-              <div className="category-buttons">
-                {categories[issueType].map((category) => (
-                  <button
-                    key={category}
-                    type="button"
-                    className={`category-btn ${selectedCategory === category ? 'selected' : ''}`}
-                    onClick={() => setSelectedCategory(category)}
-                  >
-                    {category}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="form-section">
-              <label className="section-label">Severity</label>
-              <div className="severity-selector">
-                {severities.map((severity) => (
-                  <div key={severity.value} className="severity-option">
-                    <label>
-                      <input
-                        type="radio"
-                        name="severity"
-                        value={severity.value}
-                        checked={selectedSeverity === severity.value}
-                        onChange={() => setSelectedSeverity(severity.value)}
-                      />
-                      <span className={`severity-label ${severity.value}`}>
-                        {severity.label}
-                      </span>
-                    </label>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="form-section">
-            <label className="section-label">Location</label>
-            <div className="location-inputs">
-              <input
-                type="text"
-                className="address-input"
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="Street address or landmark"
-              />
-              <label className="section-label">Zip Code</label>
-              <input
-                type="text"
-                className="zip-code-input"
-                value={zipCode}
-                onChange={(e) => setZipCode(e.target.value)}
-                placeholder="Zip code (e.g., 12345)"
-                maxLength={5}
-                pattern="\d{5}"
-              />
-              <div className="location-or">OR</div>
-              <div className="gps-section">
-                <div className="coordinates-display">
-                  {coordinates ? (
-                    <>
-                      <i className="fas fa-check-circle success-icon"></i>
-                      <span>Location captured</span>
-                    </>
-                  ) : (
-                    <span className="no-coordinates">No GPS coordinates available</span>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  className={`gps-btn ${isLoading ? 'loading' : ''}`}
-                  onClick={getLocation}
-                  disabled={isLoading}
-                >
-                  {isLoading ? (
-                    <>
-                      <i className="fas fa-spinner fa-spin"></i> Locating...
-                    </>
-                  ) : (
-                    <>
-                      <i className="fas fa-arrow-circle-up"></i> Use Current Location
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <button 
-            type="submit" 
-            className={`submit-btn ${isLoading ? 'loading' : ''}`}
-            disabled={isLoading || !image || !description || !selectedCategory}
+      
+      {/* Progress Steps */}
+      <div className="steps-container">
+        {formSteps.map((step, index) => (
+          <motion.div 
+            key={index}
+            className={`step ${index <= activeStep ? 'active' : ''}`}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: index * 0.1 }}
           >
-            {isLoading ? (
-              <>
-                <i className="fas fa-spinner fa-spin"></i> Submitting...
-              </>
-            ) : (
-              <>
-                <i className="fas fa-paper-plane"></i> Generate Report
-              </>
+            <div className="step-number">
+              {index < activeStep ? <Check className="w-4 h-4" /> : index + 1}
+            </div>
+            <div className="step-info">
+              <div className="step-icon">{step.icon}</div>
+              <span className="step-title">{step.title}</span>
+            </div>
+            {index < formSteps.length - 1 && <div className="step-line"></div>}
+          </motion.div>
+        ))}
+      </div>
+      
+      {!reportPreview ? (
+        <motion.form 
+          onSubmit={handleSubmit} 
+          className="issue-form"
+          initial={{ y: 20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ delay: 0.3 }}
+        >
+          {/* Step 1: Visual Evidence */}
+          <AnimatePresence>
+            {activeStep === 0 && (
+              <motion.div 
+                className="form-step"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                transition={{ duration: 0.3 }}
+              >
+                <div className="form-section">
+                  <div className="section-header">
+                    <label className="section-label">Visual Evidence</label>
+                    <div className="section-tooltip">
+                      <Info className="tooltip-icon" />
+                      <span className="tooltip-text">Upload a clear photo of the issue you're reporting</span>
+                    </div>
+                  </div>
+                  
+                  <div className={`image-upload-area ${preview ? 'has-image' : ''} ${formErrors.image ? 'has-error' : ''}`}>
+                    {preview ? (
+                      <div className="image-preview-container">
+                        <motion.img 
+                          src={preview} 
+                          alt="Preview" 
+                          className="image-preview"
+                          initial={{ scale: 0.9, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          transition={{ duration: 0.5 }}
+                        />
+                        <div className="image-buttons">
+                          <motion.button 
+                            type="button" 
+                            className="change-image-btn"
+                            onClick={triggerFileInput}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                          >
+                            <Upload className="w-4 h-4" /> Change Image
+                          </motion.button>
+                          <motion.button 
+                            type="button" 
+                            className="capture-image-btn"
+                            onClick={startCamera}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                          >
+                            <Camera className="w-4 h-4" /> Capture New Photo
+                          </motion.button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="upload-placeholder">
+                        <motion.div 
+                          className="upload-icon-container"
+                          animate={{ 
+                            y: [0, -10, 0],
+                            rotate: [0, 5, 0, -5, 0]
+                          }}
+                          transition={{ 
+                            duration: 4, 
+                            repeat: Infinity,
+                            ease: "easeInOut" 
+                          }}
+                        >
+                          <ImageIcon className="upload-icon" />
+                        </motion.div>
+                        <p>Click to upload or capture an image</p>
+                        <p className="hint">Max 5MB • JPEG, PNG</p>
+                        <div className="image-buttons">
+                          <motion.button 
+                            type="button" 
+                            className="upload-btn"
+                            onClick={triggerFileInput}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                          >
+                            <Upload className="w-4 h-4" /> Upload Image
+                          </motion.button>
+                          <motion.button 
+                            type="button" 
+                            className="capture-btn"
+                            onClick={startCamera}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                          >
+                            <Camera className="w-4 h-4" /> Capture Photo
+                          </motion.button>
+                        </div>
+                      </div>
+                    )}
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      className="file-input"
+                      accept="image/*"
+                      onChange={handleImageChange}
+                    />
+                    
+                    <AnimatePresence>
+                      {isCameraActive && (
+                        <motion.div 
+                          className="camera-container"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                        >
+                          <video ref={videoRef} className="camera-stream" />
+                          <canvas ref={canvasRef} style={{ display: 'none' }} />
+                          <div className="camera-controls">
+                            <motion.button 
+                              type="button" 
+                              className="capture-btn"
+                              onClick={capturePhoto}
+                              whileHover={{ scale: 1.1 }}
+                              whileTap={{ scale: 0.9 }}
+                            >
+                              <div className="capture-circle"></div>
+                            </motion.button>
+                            <motion.button 
+                              type="button" 
+                              className="cancel-btn"
+                              onClick={stopCamera}
+                              whileHover={{ scale: 1.1 }}
+                              whileTap={{ scale: 0.9 }}
+                            >
+                              <X className="w-6 h-6" />
+                            </motion.button>
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                  
+                  {formErrors.image && (
+                    <motion.div 
+                      className="error-message"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                    >
+                      <AlertCircle className="error-icon" />
+                      {formErrors.image}
+                    </motion.div>
+                  )}
+                </div>
+                
+                <div className="form-navigation">
+                  <motion.button 
+                    type="button" 
+                    className="nav-btn next"
+                    onClick={nextStep}
+                    disabled={!preview}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    Next <ChevronRight className="w-4 h-4" />
+                  </motion.button>
+                </div>
+              </motion.div>
             )}
-          </button>
-        </form>
+          </AnimatePresence>
+          
+          {/* Step 2: Location */}
+          <AnimatePresence>
+            {activeStep === 1 && (
+              <motion.div 
+                className="form-step"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                transition={{ duration: 0.3 }}
+              >
+                <div className="form-section">
+                  <div className="section-header">
+                    <label className="section-label">Location</label>
+                    <div className="section-tooltip">
+                      <Info className="tooltip-icon" />
+                      <span className="tooltip-text">Provide the location where the issue occurred</span>
+                    </div>
+                  </div>
+                  
+                  <div className="location-inputs">
+                    <div className="input-group">
+                      <label className="input-label">Street Address</label>
+                      <div className="input-container">
+                        <MapPin className="input-icon" />
+                        <input
+                          type="text"
+                          className="form-input"
+                          value={address}
+                          onChange={(e) => setAddress(e.target.value)}
+                          placeholder="Street address or landmark"
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="input-group">
+                      <label className="input-label">Zip Code</label>
+                      <div className="input-container">
+                        <Map className="input-icon" />
+                        <input
+                          type="text"
+                          className="form-input"
+                          value={zipCode}
+                          onChange={(e) => setZipCode(e.target.value)}
+                          placeholder="Zip code (e.g., 12345)"
+                          maxLength={5}
+                          pattern="\d{5}"
+                        />
+                      </div>
+                    </div>
+                    
+                    <div className="location-divider">
+                      <div className="divider-line"></div>
+                      <span className="divider-text">OR</span>
+                      <div className="divider-line"></div>
+                    </div>
+                    
+                    <div className="gps-section">
+                      <div className={`coordinates-display ${coordinates ? 'has-coordinates' : ''} ${formErrors.location ? 'has-error' : ''}`}>
+                        {coordinates ? (
+                          <>
+                            <Check className="success-icon" />
+                            <span>Location captured</span>
+                          </>
+                        ) : (
+                          <span className="no-coordinates">No GPS coordinates available</span>
+                        )}
+                      </div>
+                      
+                      <motion.button
+                        type="button"
+                        className={`gps-btn ${isLoading ? 'loading' : ''}`}
+                        onClick={getLocation}
+                        disabled={isLoading}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                      >
+                        {isLoading ? (
+                          <>
+                            <Loader className="w-4 h-4 animate-spin" /> Locating...
+                          </>
+                        ) : (
+                          <>
+                            <Navigation className="w-4 h-4" /> Use Current Location
+                          </>
+                        )}
+                      </motion.button>
+                    </div>
+                  </div>
+                  
+                  {formErrors.location && (
+                    <motion.div 
+                      className="error-message"
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                    >
+                      <AlertCircle className="error-icon" />
+                      {formErrors.location}
+                    </motion.div>
+                  )}
+                </div>
+                
+                <div className="form-navigation">
+                  <motion.button 
+                    type="button" 
+                    className="nav-btn prev"
+                    onClick={prevStep}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    <ChevronLeft className="w-4 h-4" /> Previous
+                  </motion.button>
+                  <motion.button 
+                    type="submit" 
+                    className={`nav-btn submit ${isLoading ? 'loading' : ''}`}
+                    disabled={isLoading || !image || (!address && !coordinates && !zipCode)}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    {isLoading ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" /> Generating...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4" /> Generate Report
+                      </>
+                    )}
+                  </motion.button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.form>
       ) : (
-        <div className="report-preview-container">
-          <div className="form-header">
-            <h3 className="report-preview-header">
-              <i className="fas fa-file-alt header-icon"></i>
-              Review Generated Report
-            </h3>
+        <motion.div 
+          className="report-preview-container"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+        >
+          <div className="preview-header">
+            <div className="header-left">
+              <div className="header-icon-bg">
+                <FileText className="header-icon" />
+              </div>
+              <div>
+                <h3 className="preview-title">Review Generated Report</h3>
+                <p className="preview-subtitle">Issue #{issueId}</p>
+              </div>
+            </div>
+            
+            <motion.button 
+              className="edit-btn"
+              onClick={toggleEdit}
+              disabled={isLoading}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+            >
+              {isEditing ? (
+                <>
+                  <Save className="w-4 h-4" /> Save Draft
+                </>
+              ) : (
+                <>
+                  <Edit className="w-4 h-4" /> Edit Report
+                </>
+              )}
+            </motion.button>
           </div>
           
-          <button 
-            className="edit-btn"
-            onClick={toggleEdit}
-            disabled={isLoading}
-          >
-            <i className="fas fa-edit"></i> {isEditing ? 'Save Draft' : 'Edit Report'}
-          </button>
-
           <div className="report-content">
             <div className="report-section">
-              <h4>Issue Overview</h4>
-              <p><strong>Type:</strong> {editedReport.issue_overview.issue_type}</p>
-              <p><strong>Severity:</strong> 
-                {isEditing ? (
-                  <select
-                    value={editedReport.issue_overview.severity}
-                    onChange={(e) => handleEditChange('issue_overview', 'severity', e.target.value)}
-                    className="edit-input"
-                  >
-                    {severities.map((severity) => (
-                      <option key={severity.value} value={severity.value}>{severity.label}</option>
-                    ))}
-                  </select>
-                ) : (
-                  editedReport.issue_overview.severity
-                )}
-              </p>
-              <p><strong>Confidence:</strong> {editedReport.issue_overview.confidence}%</p>
-              <p><strong>Category:</strong> {editedReport.issue_overview.category}</p>
-              <p><strong>Summary:</strong> 
+              <h4 className="section-title">
+                <Target className="section-icon" /> Issue Overview
+              </h4>
+              <div className="report-grid">
+                <div className="report-item">
+                  <label className="report-label">Type</label>
+                  <p className="report-value">{editedReport.issue_overview.issue_type}</p>
+                </div>
+                
+                <div className="report-item">
+                  <label className="report-label">Severity</label>
+                  {isEditing ? (
+                    <select
+                      value={editedReport.issue_overview.severity}
+                      onChange={(e) => handleEditChange('issue_overview', 'severity', e.target.value)}
+                      className="edit-select"
+                    >
+                      {severities.map((severity) => (
+                        <option key={severity.value} value={severity.value}>{severity.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="severity-display">
+                      {severities.find(s => s.value === editedReport.issue_overview.severity)?.icon}
+                      <span>{severities.find(s => s.value === editedReport.issue_overview.severity)?.label}</span>
+                    </div>
+                  )}
+                </div>
+                
+                <div className="report-item">
+                  <label className="report-label">Confidence</label>
+                  <div className="confidence-bar">
+                    <div className="confidence-track">
+                      <motion.div 
+                        className="confidence-fill"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${editedReport.issue_overview.confidence}%` }}
+                        transition={{ duration: 1, delay: 0.2 }}
+                      ></motion.div>
+                    </div>
+                    <span>{editedReport.issue_overview.confidence}%</span>
+                  </div>
+                </div>
+                
+                <div className="report-item">
+                  <label className="report-label">Category</label>
+                  <p className="report-value">{editedReport.issue_overview.category}</p>
+                </div>
+              </div>
+              
+              <div className="report-item full-width">
+                <label className="report-label">Summary</label>
                 {isEditing ? (
                   <textarea
                     value={editedReport.issue_overview.summary_explanation}
@@ -575,156 +874,273 @@ function UploadForm({ setStatus, fetchIssues }) {
                     maxLength={200}
                   />
                 ) : (
-                  editedReport.issue_overview.summary_explanation
+                  <p className="report-value">{editedReport.issue_overview.summary_explanation}</p>
                 )}
-              </p>
+              </div>
             </div>
             
             <div className="report-section">
-              <h4>Location Details</h4>
-              <p><strong>Address:</strong> {reportPreview.report.template_fields.address || 'Not specified'}</p>
-              <p><strong>Zip Code:</strong> {reportPreview.report.template_fields.zip_code || 'Not specified'}</p>
-              <p><strong>Map Link:</strong> 
-                <a href={reportPreview.report.template_fields.map_link} target="_blank" rel="noopener noreferrer">
-                  {reportPreview.report.template_fields.map_link || 'No map link available'}
-                </a>
-              </p>
+              <h4 className="section-title">
+                <MapPin className="section-icon" /> Location Details
+              </h4>
+              <div className="report-grid">
+                <div className="report-item">
+                  <label className="report-label">Address</label>
+                  <p className="report-value">{reportPreview.report.template_fields.address || 'Not specified'}</p>
+                </div>
+                
+                <div className="report-item">
+                  <label className="report-label">Zip Code</label>
+                  <p className="report-value">{reportPreview.report.template_fields.zip_code || 'Not specified'}</p>
+                </div>
+                
+                <div className="report-item full-width">
+                  <label className="report-label">Map Link</label>
+                  <a 
+                    href={reportPreview.report.template_fields.map_link} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="map-link"
+                  >
+                    <Map className="w-4 h-4" /> View on Map
+                  </a>
+                </div>
+              </div>
             </div>
             
             <div className="report-section">
-              <h4>Priority</h4>
-              {isEditing ? (
-                <select
-                  value={editedReport.template_fields.priority}
-                  onChange={(e) => handleEditChange('template_fields', 'priority', e.target.value)}
-                  className="edit-input"
-                >
-                  {priorities.map((priority) => (
-                    <option key={priority.value} value={priority.value}>{priority.label}</option>
-                  ))}
-                </select>
-              ) : (
-                <p>{editedReport.template_fields.priority}</p>
-              )}
-            </div>
-            
-            <div className="report-section">
-              <h4>Photo Evidence</h4>
+              <h4 className="section-title">
+                <ImageIcon className="section-icon" /> Photo Evidence
+              </h4>
               {reportPreview.image_content ? (
-                <img 
-                  src={`data:image/jpeg;base64,${reportPreview.image_content}`} 
-                  alt="Issue" 
-                  className="report-image" 
-                />
+                <motion.div 
+                  className="image-container"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  <img 
+                    src={`data:image/jpeg;base64,${reportPreview.image_content}`} 
+                    alt="Issue" 
+                    className="report-image" 
+                  />
+                  <div className="image-info">
+                    <p>{reportPreview.report.template_fields.image_filename || 'Not specified'}</p>
+                  </div>
+                </motion.div>
               ) : (
-                <p className="text-red-500">No image available</p>
+                <div className="no-image">
+                  <ImageIcon className="no-image-icon" />
+                  <p>No image available</p>
+                </div>
               )}
-              <p><small>File: {reportPreview.report.template_fields.image_filename || 'Not specified'}</small></p>
             </div>
             
             <div className="report-section">
-              <h4>Recommended Actions</h4>
+              <h4 className="section-title">
+                <Target className="section-icon" /> Recommended Actions
+              </h4>
               {isEditing ? (
-                editedReport.recommended_actions.map((action, index) => (
-                  <input
-                    key={index}
-                    type="text"
-                    value={action}
-                    onChange={(e) => handleEditChange(null, 'recommended_actions', e.target.value, index)}
-                    className="edit-input"
-                  />
-                ))
-              ) : (
-                <ul>
+                <div className="actions-list">
                   {editedReport.recommended_actions.map((action, index) => (
-                    <li key={index}>{action}</li>
+                    <div key={index} className="action-item">
+                      <input
+                        type="text"
+                        value={action}
+                        onChange={(e) => handleEditChange(null, 'recommended_actions', e.target.value, index)}
+                        className="edit-input"
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <ul className="actions-list">
+                  {editedReport.recommended_actions.map((action, index) => (
+                    <motion.li 
+                      key={index} 
+                      className="action-item"
+                      initial={{ opacity: 0, x: -10 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: index * 0.1 }}
+                    >
+                      <Check className="action-icon" />
+                      {action}
+                    </motion.li>
                   ))}
                 </ul>
               )}
             </div>
-
+            
             <div className="report-section">
-              <h4>AI Analysis</h4>
-              <p><strong>Potential Impact:</strong> {editedReport.detailed_analysis.potential_consequences_if_ignored}</p>
-              <p><strong>Urgency Reason:</strong> {editedReport.detailed_analysis.public_safety_risk}</p>
+              <h4 className="section-title">
+                <Shield className="section-icon" /> AI Analysis
+              </h4>
+              <div className="analysis-grid">
+                <div className="analysis-item">
+                  <label className="analysis-label">Potential Impact</label>
+                  <p className="analysis-value">{editedReport.detailed_analysis.potential_consequences_if_ignored}</p>
+                </div>
+                
+                <div className="analysis-item">
+                  <label className="analysis-label">Urgency Reason</label>
+                  <p className="analysis-value">{editedReport.detailed_analysis.public_safety_risk}</p>
+                </div>
+              </div>
             </div>
-
+            
             <div className="report-section">
-              <h4>Responsible Authorities</h4>
-              <ul>
+              <h4 className="section-title">
+                <Users className="section-icon" /> Responsible Authorities
+                {isEditing && (
+                  <button 
+                    type="button" 
+                    className="edit-authorities-btn"
+                    onClick={() => setShowAuthoritySelector(true)}
+                  >
+                    <Edit className="w-4 h-4" /> Edit Authorities
+                  </button>
+                )}
+              </h4>
+              <div className="authorities-grid">
                 {editedReport.responsible_authorities_or_parties.map((authority, index) => (
-                  <li key={index}>{authority.name} ({authority.type})</li>
+                  <motion.div 
+                    key={index} 
+                    className="authority-card"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.1 }}
+                    whileHover={{ y: -5 }}
+                  >
+                    <div className="authority-icon">
+                      <Building className="w-5 h-5" />
+                    </div>
+                    <div className="authority-info">
+                      <h5 className="authority-name">{authority.name}</h5>
+                      <p className="authority-type">{authority.type}</p>
+                    </div>
+                  </motion.div>
                 ))}
-              </ul>
+              </div>
             </div>
           </div>
           
           {!showDeclineForm ? (
             <div className="report-actions">
-              <button 
-                className="accept-btn"
+              <motion.button 
+                className="action-btn accept"
                 onClick={handleAccept}
                 disabled={isLoading}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
               >
                 {isLoading ? (
                   <>
-                    <i className="fas fa-spinner fa-spin"></i> Accepting...
+                    <Loader className="w-4 h-4 animate-spin" /> Accepting...
                   </>
                 ) : (
                   <>
-                    <i className="fas fa-check"></i> Accept Report
+                    <Check className="w-4 h-4" /> Accept Report
                   </>
                 )}
-              </button>
-              <button 
-                className="decline-btn"
+              </motion.button>
+              
+              <motion.button 
+                className="action-btn decline"
                 onClick={handleDecline}
                 disabled={isLoading}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
               >
-                <i className="fas fa-times"></i> Decline Report
-              </button>
+                <X className="w-4 h-4" /> Decline Report
+              </motion.button>
+              
+              <motion.button 
+                className="action-btn secondary"
+                onClick={resetForm}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+              >
+                <RotateCcw className="w-4 h-4" /> New Report
+              </motion.button>
             </div>
           ) : (
-            <form onSubmit={handleDeclineSubmit} className="decline-form">
+            <motion.form 
+              onSubmit={handleDeclineSubmit} 
+              className="decline-form"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+            >
               <div className="form-section">
-                <label htmlFor="declineReason" className="section-label">Reason for Declining</label>
+                <label className="section-label">Reason for Declining</label>
                 <textarea
-                  id="declineReason"
-                  className="description-input"
+                  className="form-textarea"
                   rows="4"
                   value={declineReason}
                   onChange={(e) => setDeclineReason(e.target.value)}
                   placeholder="Please explain why you are declining this report..."
                   required
                 />
-              </div>
-              <button 
-                type="submit" 
-                className={`submit-btn ${isLoading ? 'loading' : ''}`}
-                disabled={isLoading || !declineReason}
-              >
-                {isLoading ? (
-                  <>
-                    <i className="fas fa-spinner fa-spin"></i> Submitting...
-                  </>
-                ) : (
-                  <>
-                    <i className="fas fa-paper-plane"></i> Submit Feedback
-                  </>
+                {formErrors.decline && (
+                  <motion.div 
+                    className="error-message"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                  >
+                    <AlertCircle className="error-icon" />
+                    {formErrors.decline}
+                  </motion.div>
                 )}
-              </button>
-            </form>
+              </div>
+              
+              <div className="form-actions">
+                <motion.button 
+                  type="button" 
+                  className="action-btn secondary"
+                  onClick={() => setShowDeclineForm(false)}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  Cancel
+                </motion.button>
+                
+                <motion.button 
+                  type="submit" 
+                  className={`action-btn submit ${isLoading ? 'loading' : ''}`}
+                  disabled={isLoading || !declineReason}
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader className="w-4 h-4 animate-spin" /> Submitting...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4" /> Submit Feedback
+                    </>
+                  )}
+                </motion.button>
+              </div>
+            </motion.form>
           )}
-
-          {successMessage && (
-            <div className="success-message">
-              <i className="fas fa-check-circle success-icon"></i>
-              {successMessage}
-            </div>
-          )}
-        </div>
+          
+          <AnimatePresence>
+            {successMessage && (
+              <motion.div 
+                className="success-message"
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+              >
+                <div className="success-icon-bg">
+                  <Check className="success-icon" />
+                </div>
+                <p>{successMessage}</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
       )}
-    </div>
+    </motion.div>
   );
 }
 

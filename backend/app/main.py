@@ -5,6 +5,8 @@ from routes.issues import router as issues_router
 import logging
 import os
 import uvicorn
+import json
+from pathlib import Path
 
 # Setup logging with detailed format
 logging.basicConfig(
@@ -23,7 +25,9 @@ app.add_middleware(
     allow_origins=[
         "https://snapfix-ai-1.onrender.com",  # Frontend URL on Render
         "https://snapfix-ai.onrender.com",    # Backend URL (for same-origin or misconfig)
-        "http://localhost:5173"               # Local development
+        "http://localhost:5173",             # Local development (Vite default)
+        "http://localhost:3000",             # Local development (React default)
+        "http://localhost:3001"              # Local development (Alternative port)
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -80,6 +84,41 @@ async def health_check():
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
         raise HTTPException(status_code=503, detail=f"Database unavailable: {str(e)}")
+
+# Authorities endpoint
+@app.get("/api/authorities/{zip_code}")
+async def get_authorities_by_zip_code(zip_code: str):
+    logger.debug(f"Authorities requested for zip code: {zip_code}")
+    try:
+        # Load authorities from JSON file
+        zip_code_authorities_path = Path("data/zip_code_authorities.json")
+        if not zip_code_authorities_path.exists():
+            logger.error("Zip code authorities file not found")
+            raise HTTPException(status_code=404, detail="Authorities data not found")
+            
+        with open(zip_code_authorities_path, "r") as f:
+            authorities_data = json.load(f)
+        
+        # Get authorities for the specified zip code or use default
+        authorities = {}
+        if zip_code in authorities_data:
+            authorities = authorities_data[zip_code]
+        else:
+            logger.warning(f"No authorities found for zip code {zip_code}, using default")
+            authorities = authorities_data.get("default", {})
+        
+        # Format authorities as a list of objects by type
+        formatted_authorities = {}
+        for auth_type, auth_list in authorities.items():
+            if auth_type not in formatted_authorities:
+                formatted_authorities[auth_type] = []
+            formatted_authorities[auth_type].extend(auth_list)
+            
+        return formatted_authorities
+            
+    except Exception as e:
+        logger.error(f"Error fetching authorities for zip code {zip_code}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching authorities: {str(e)}")
 
 # Include API routes
 app.include_router(issues_router, prefix="/api")

@@ -92,7 +92,8 @@ def store_issue(
     authority_name: List[str] = None,
     timestamp_formatted: str = None,
     timezone_name: str = None,
-    user_email: Optional[str] = None
+    user_email: Optional[str] = None,
+    available_authorities: Optional[List[Dict[str, str]]] = None
 ) -> str:
     """
     Store an issue in MongoDB with zip code and return the image ID.
@@ -104,7 +105,6 @@ def store_issue(
         # Validate required fields
         required_fields = {
             "issue_type": issue_type,
-            "description": description,
             "severity": severity,
             "category": category,
             "priority": priority,
@@ -128,6 +128,21 @@ def store_issue(
         elif len(authority_email) != len(authority_name):
             raise ValueError("authority_email and authority_name lists must have the same length")
 
+        # Validate available_authorities
+        if available_authorities is not None:
+            for auth in available_authorities:
+                if not isinstance(auth, dict) or not all(key in auth for key in ["name", "email", "type"]):
+                    logger.warning(f"Invalid available_authorities format for issue {issue_id}: {auth}. Setting to default.")
+                    available_authorities = [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
+                    break
+                if not auth.get("email") or not auth.get("name") or not auth.get("type"):
+                    logger.warning(f"Missing required fields in available_authorities for issue {issue_id}: {auth}. Setting to default.")
+                    available_authorities = [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
+                    break
+        else:
+            available_authorities = [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}]
+            logger.debug(f"No available_authorities provided for issue {issue_id}. Using default.")
+
         # Store the image in GridFS
         image_id = fs.put(
             image_content,
@@ -138,11 +153,11 @@ def store_issue(
         # Create issue document with fallback values
         issue_document = {
             "_id": issue_id,
-            "description": description,
+            "description": description or "No description provided",
             "address": address or "Unknown Address",
             "zip_code": zip_code or "N/A",
-            "latitude": latitude,
-            "longitude": longitude,
+            "latitude": latitude or 0.0,
+            "longitude": longitude or 0.0,
             "issue_type": issue_type,
             "severity": severity,
             "image_id": str(image_id),
@@ -157,13 +172,16 @@ def store_issue(
             "timestamp_formatted": timestamp_formatted or datetime.now().strftime("%Y-%m-%d %H:%M"),
             "timezone_name": timezone_name or "UTC",
             "user_email": user_email,
+            "available_authorities": available_authorities,
             "decline_reason": None,
-            "decline_history": []
+            "decline_history": [],
+            "email_status": None,
+            "email_errors": []
         }
 
         # Insert issue into MongoDB
         db.issues.insert_one(issue_document)
-        logger.info(f"Stored issue {issue_id} with image ID {image_id}, authorities: {authority_name}, user_email: {user_email}, zip_code: {zip_code or 'N/A'}")
+        logger.info(f"Stored issue {issue_id} with image ID {image_id}, authorities: {authority_name}, user_email: {user_email}, zip_code: {zip_code or 'N/A'}, available_authorities: {available_authorities}")
         return str(image_id)
     except Exception as e:
         logger.error(f"Failed to store issue {issue_id}: {str(e)}", exc_info=True)
@@ -223,12 +241,15 @@ def get_issues() -> List[Dict[str, Any]]:
             issue["description"] = issue.get("description", "No description")
             issue["address"] = issue.get("address", "Unknown Address")
             issue["zip_code"] = issue.get("zip_code", "N/A")
+            issue["latitude"] = issue.get("latitude", 0.0)
+            issue["longitude"] = issue.get("longitude", 0.0)
             issue["severity"] = issue.get("severity", "Medium")
             issue["category"] = issue.get("category", "Public")
             issue["priority"] = issue.get("priority", "Medium")
             issue["user_email"] = issue.get("user_email", None)
             issue["decline_reason"] = issue.get("decline_reason", None)
             issue["decline_history"] = issue.get("decline_history", [])
+            issue["available_authorities"] = issue.get("available_authorities", [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}])
             # Clean authority_email
             authority_email = issue.get("authority_email", ["snapfix@momntumai.com"])
             if isinstance(authority_email, list):
@@ -270,12 +291,15 @@ def get_report(issue_id: str) -> Dict[str, Any]:
         issue["description"] = issue.get("description", "No description")
         issue["address"] = issue.get("address", "Unknown Address")
         issue["zip_code"] = issue.get("zip_code", "N/A")
+        issue["latitude"] = issue.get("latitude", 0.0)
+        issue["longitude"] = issue.get("longitude", 0.0)
         issue["severity"] = issue.get("severity", "Medium")
         issue["category"] = issue.get("category", "Public")
         issue["priority"] = issue.get("priority", "Medium")
         issue["user_email"] = issue.get("user_email", None)
         issue["decline_reason"] = issue.get("decline_reason", None)
         issue["decline_history"] = issue.get("decline_history", [])
+        issue["available_authorities"] = issue.get("available_authorities", [{"name": "City Department", "email": "snapfix@momntumai.com", "type": "general"}])
         # Clean authority_email
         authority_email = issue.get("authority_email", ["snapfix@momntumai.com"])
         if isinstance(authority_email, list):

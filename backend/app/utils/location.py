@@ -21,43 +21,68 @@ def load_json_data(file_name: str) -> dict:
         logger.error(f"Failed to decode JSON from {file_path}: {str(e)}")
         return {}
 
-def get_authority(address: str, issue_type: str, latitude: float, longitude: float, category: str) -> List[Dict[str, str]]:
+def get_authority(address: str, issue_type: str, latitude: float, longitude: float, category: str) -> Dict[str, List[Dict[str, str]]]:
     """
     Determine the relevant authorities for an issue based on issue type, category, and coordinates.
-    Returns a list of dictionaries with department details (name, email, type) and timezone.
+    Returns a dictionary with responsible and available authorities, each as a list of dictionaries with department details (name, email, type, timezone).
     """
     try:
         issue_type = issue_type.lower() if issue_type else "unknown"
         issue_category_map = load_json_data("issue_category_map.json")
         issue_category = category if category else issue_category_map.get(issue_type, "public")
-        timezone = get_timezone_name(latitude, longitude)
+        timezone = get_timezone_name(latitude, longitude) or "UTC"
         logger.debug(f"Resolved timezone for coordinates ({latitude}, {longitude}): {timezone}")
 
-        # Default department mappings for fallback
-        default_authorities = {
-            "public": [{"name": "City Department", "email": "chrishabh1000@gmail.com", "type": "general", "timezone": timezone}],
-            "business": [{"name": "Business Support", "email": "chrishabh2002@gmail.com", "type": "business_support", "timezone": timezone}],
-            "public_and_business": [{"name": "City Department", "email": "chrishabh1000@gmail.com", "type": "general", "timezone": timezone}]
+        # Default authorities for fallback
+        default_authorities = [
+            {"name": "City Department", "email": "chrishabh1000@gmail.com", "type": "general", "timezone": timezone}
+        ]
+        default_available = default_authorities + [
+            {"name": "General Support", "email": "chrishabh2002@gmail.com", "type": "business_support", "timezone": timezone}
+        ]
+
+        # Map issue categories to responsible and available authorities
+        authority_map = {
+            "public": {
+                "responsible_authorities": default_authorities,
+                "available_authorities": default_available
+            },
+            "business": {
+                "responsible_authorities": [{"name": "Business Support", "email": "chrishabh2002@gmail.com", "type": "business_support", "timezone": timezone}],
+                "available_authorities": default_available
+            },
+            "public_and_business": {
+                "responsible_authorities": default_authorities,
+                "available_authorities": default_available
+            }
         }
 
-        authorities = default_authorities.get(issue_category, default_authorities["public"])
-        logger.info(f"Authorities for issue type {issue_type} at {address} (timezone: {timezone}): {[auth['name'] for auth in authorities]}")
-        return authorities
+        result = authority_map.get(issue_category, {
+            "responsible_authorities": default_authorities,
+            "available_authorities": default_available
+        })
+        logger.info(f"Authorities for issue type {issue_type} at {address} (timezone: {timezone}): {[auth['name'] for auth in result['responsible_authorities']]}")
+        return result
     except Exception as e:
         logger.error(f"Failed to determine authorities for issue type {issue_type}: {str(e)}")
-        return [{"name": "City Department", "email": "chrishabh1000@gmail.com", "type": "general", "timezone": "UTC"}]
+        return {
+            "responsible_authorities": [],
+            "available_authorities": [{"name": "City Department", "email": "chrishabh1000@gmail.com", "type": "general", "timezone": "UTC"}]
+        }
 
-def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> List[Dict[str, str]]:
+def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> Dict[str, List[Dict[str, str]]]:
     """
     Determine authorities based on zip code, issue type, and category.
-    Returns a list of dictionaries with department details (name, email, type) and timezone,
-    or a message if the zip code is not supported.
+    Returns a dictionary with responsible and available authorities, each as a list of dictionaries with department details (name, email, type, timezone).
     """
     try:
         # Validate zip code format (5 digits)
         if not zip_code or not zip_code.isdigit() or len(zip_code) != 5:
             logger.warning(f"Invalid zip code format: {zip_code}. Returning unavailable message.")
-            return [{"message": "Snapfix services are not available in this area, coming soon in the future"}]
+            return {
+                "responsible_authorities": [],
+                "available_authorities": [{"message": "Snapfix services are not available in this area, coming soon in the future"}]
+            }
 
         issue_type = issue_type.lower() if issue_type else "unknown"
         issue_category_map = load_json_data("issue_category_map.json")
@@ -69,19 +94,46 @@ def get_authority_by_zip_code(zip_code: str, issue_type: str, category: str) -> 
         zip_key = zip_code if zip_code in zip_code_authorities else None
         if not zip_key:
             logger.warning(f"Zip code {zip_code} not found in database. Returning unavailable message.")
-            return [{"message": "Snapfix services are not available in this area, coming soon in the future"}]
+            return {
+                "responsible_authorities": [],
+                "available_authorities": [{"message": "Snapfix services are not available in this area, coming soon in the future"}]
+            }
 
-        authorities = []
+        # Get responsible authorities from zip_code_authorities
+        responsible_authorities = []
+        available_authorities = []
         for dept in departments:
             if dept in zip_code_authorities.get(zip_key, {}):
-                authorities.extend(zip_code_authorities[zip_key][dept])
+                dept_authorities = zip_code_authorities[zip_key][dept]
+                responsible_authorities.extend(dept_authorities)
+                available_authorities.extend(dept_authorities)
 
-        if not authorities:
+        # Add additional authorities for selection (e.g., general or business support)
+        available_authorities.extend([
+            {"name": "General Support", "email": "chrishabh2002@gmail.com", "type": "business_support", "timezone": responsible_authorities[0]["timezone"] if responsible_authorities else "UTC"}
+        ])
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_responsible = [auth for auth in responsible_authorities if not (auth["email"] in seen or seen.add(auth["email"]))]
+        unique_available = [auth for auth in available_authorities if not (auth["email"] in seen or seen.add(auth["email"]))]
+
+        if not unique_responsible:
             logger.warning(f"No matching authorities for zip code {zip_code} and issue type {issue_type}. Returning unavailable message.")
-            return [{"message": "Snapfix services are not available in this area, coming soon in the future"}]
+            return {
+                "responsible_authorities": [],
+                "available_authorities": [{"message": "Snapfix services are not available in this area, coming soon in the future"}]
+            }
 
-        logger.info(f"Authorities for zip code {zip_code} and issue type {issue_type} (timezone: {authorities[0]['timezone'] if authorities else 'UTC'}): {[auth['name'] for auth in authorities]}")
-        return authorities
+        result = {
+            "responsible_authorities": unique_responsible,
+            "available_authorities": unique_available
+        }
+        logger.info(f"Authorities for zip code {zip_code} and issue type {issue_type} (timezone: {unique_responsible[0]['timezone'] if unique_responsible else 'UTC'}): {[auth['name'] for auth in unique_responsible]}")
+        return result
     except Exception as e:
         logger.error(f"Failed to determine authorities for zip code {zip_code} and issue type {issue_type}: {str(e)}")
-        return [{"message": "Snapfix services are not available in this area, coming soon in the future"}]
+        return {
+            "responsible_authorities": [],
+            "available_authorities": [{"message": "Snapfix services are not available in this area, coming soon in the future"}]
+        }
