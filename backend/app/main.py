@@ -23,14 +23,15 @@ app = FastAPI(title="SnapFix AI Backend")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://snapfix-ai-frontend-24jlyd3yv-rishav-momntumais-projects.vercel.app",  # ✅ Vercel Frontend
-        "http://localhost:5173",  # Dev (Vite)
-        "http://localhost:3000",  # Dev (React)
+        "https://snapfix-ai-frontend-24jlyd3yv-rishav-momntumais-projects.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Middleware to log all requests
 @app.middleware("http")
