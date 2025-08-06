@@ -23,8 +23,7 @@ app = FastAPI(title="SnapFix AI Backend")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://snapfix-ai-1.onrender.com",  # Frontend URL on Render
-        "https://snapfix-ai.onrender.com",    # Backend URL (for same-origin or misconfig)
+        "https://snap-fix-ai.vercel.app/", # Vercel production
         "http://localhost:5173",             # Local development (Vite default)
         "http://localhost:3000",             # Local development (React default)
         "http://localhost:3001"              # Local development (Alternative port)
