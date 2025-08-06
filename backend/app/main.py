@@ -23,8 +23,8 @@ app = FastAPI(title="SnapFix AI Backend")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://snapfix-ai-frontend-24jlyd3yv-rishav-momntumais-projects.vercel.app",  # Current frontend URL
-        "https://snapfix-ai-frontend-git-main-rishav-momntumais-projects.vercel.app",  # Alternative frontend URL
+        "https://snapfix-ai-1.onrender.com",  # Frontend URL on Render
+        "https://snapfix-ai.onrender.com",    # Backend URL (for same-origin or misconfig)
         "http://localhost:5173",             # Local development (Vite default)
         "http://localhost:3000",             # Local development (React default)
         "http://localhost:3001"              # Local development (Alternative port)
@@ -33,10 +33,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.get("/ping")
-async def ping():
-    return {"message": "pong"}
 
 # Log all incoming requests
 @app.middleware("http")
